@@ -33,6 +33,10 @@
 		{
 			"Name": "ModularGameplay",
 			"Enabled": true
+		},
+		{
+			"Name": "MouchriqueThymmeZombie",
+			"Enabled": true
 		}
 	]
 }
