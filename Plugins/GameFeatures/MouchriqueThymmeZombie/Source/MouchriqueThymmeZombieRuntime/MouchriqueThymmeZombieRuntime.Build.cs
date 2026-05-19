@@ -38,7 +38,7 @@ public class MouchriqueThymmeZombieRuntime : ModuleRules
 				"Engine",
 				"Slate",
 				"SlateCore",
-				"AiModule"
+                "AIModule"
 				// ... add private dependencies that you statically link with here ...	
 			}
 			);
