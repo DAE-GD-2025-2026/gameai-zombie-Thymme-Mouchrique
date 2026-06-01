@@ -2,15 +2,15 @@
 
 #include "CoreMinimal.h"
 #include "BehaviorTree/BTTaskNode.h"
-#include "BTTask_FindFleeLocation.generated.h"
+#include "BTTask_FindRandomLocation.generated.h"
 
 UCLASS()
-class MOUCHRIQUETHYMMEZOMBIERUNTIME_API UBTTask_FindFleeLocation : public UBTTaskNode
+class MOUCHRIQUETHYMMEZOMBIERUNTIME_API UBTTask_FindRandomLocation : public UBTTaskNode
 {
 	GENERATED_BODY()
 
 public:
-	UBTTask_FindFleeLocation();
+	UBTTask_FindRandomLocation();
 
 	virtual EBTNodeResult::Type ExecuteTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory) override;
 };
