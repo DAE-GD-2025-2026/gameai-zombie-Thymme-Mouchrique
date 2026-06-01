@@ -39,7 +39,7 @@ EBTNodeResult::Type UBTTask_FindRandomLocation::ExecuteTask(UBehaviorTreeCompone
 
 	const bool bFound = NavSystem->GetRandomReachablePointInRadius(
 		Pawn->GetActorLocation(),
-		2500.f,
+		500.f,
 		NavLocation
 	);
 

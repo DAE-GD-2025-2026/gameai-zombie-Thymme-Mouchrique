@@ -26,6 +26,7 @@ public class MouchriqueThymmeZombieRuntime : ModuleRules
 			new string[]
 			{
 				"Core",
+				"GameAI_Zombie",
 				// ... add other public dependencies that you statically link with here ...
 			}
 			);
@@ -39,7 +40,7 @@ public class MouchriqueThymmeZombieRuntime : ModuleRules
 				"Slate",
 				"SlateCore",
                 "AIModule",
-                "NavigationSystem"
+                "NavigationSystem",
 				// ... add private dependencies that you statically link with here ...	
 			}
 			);

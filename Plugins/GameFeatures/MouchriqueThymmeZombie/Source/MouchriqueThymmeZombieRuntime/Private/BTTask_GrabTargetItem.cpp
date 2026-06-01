@@ -1,0 +1,53 @@
+#include "BTTask_GrabTargetItem.h"
+
+#include "AIController.h"
+#include "BehaviorTree/BlackboardComponent.h"
+#include "GameFramework/Pawn.h"
+
+#include "Common/InventoryComponent.h"
+#include "Items/BaseItem.h"
+
+UBTTask_GrabTargetItem::UBTTask_GrabTargetItem()
+{
+	NodeName = TEXT("Grab Target Item");
+}
+
+EBTNodeResult::Type UBTTask_GrabTargetItem::ExecuteTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory)
+{
+	UBlackboardComponent* Blackboard = OwnerComp.GetBlackboardComponent();
+	AAIController* Controller = OwnerComp.GetAIOwner();
+
+	if (!Blackboard || !Controller)
+	{
+		return EBTNodeResult::Failed;
+	}
+
+	APawn* Pawn = Controller->GetPawn();
+	if (!Pawn)
+	{
+		return EBTNodeResult::Failed;
+	}
+
+	ABaseItem* Item = Cast<ABaseItem>(Blackboard->GetValueAsObject(TEXT("TargetItem")));
+	if (!Item)
+	{
+		return EBTNodeResult::Failed;
+	}
+
+	UInventoryComponent* Inventory = Pawn->FindComponentByClass<UInventoryComponent>();
+	if (!Inventory)
+	{
+		return EBTNodeResult::Failed;
+	}
+
+	for (int SlotIdx = 0; SlotIdx < Inventory->GetInventoryCapacity(); ++SlotIdx)
+	{
+		if (Inventory->GrabItem(SlotIdx, Item))
+		{
+			Blackboard->ClearValue(TEXT("TargetItem"));
+			return EBTNodeResult::Succeeded;
+		}
+	}
+
+	return EBTNodeResult::Failed;
+}
