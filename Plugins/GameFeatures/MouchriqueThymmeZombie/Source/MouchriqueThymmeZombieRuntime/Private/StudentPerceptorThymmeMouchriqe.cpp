@@ -72,11 +72,6 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 	}
 	else
 	{
-		UE_LOG(LogTemp, Warning, TEXT("CLEARING TargetEnemy"));
-
-		if (Blackboard->GetValueAsObject(TEXT("TargetEnemy")) == Actor)
-		{
-			Blackboard->ClearValue(TEXT("TargetEnemy"));
-		}
+		UE_LOG(LogTemp, Warning, TEXT("LOST TargetEnemy, keeping memory"));
 	}
 }
