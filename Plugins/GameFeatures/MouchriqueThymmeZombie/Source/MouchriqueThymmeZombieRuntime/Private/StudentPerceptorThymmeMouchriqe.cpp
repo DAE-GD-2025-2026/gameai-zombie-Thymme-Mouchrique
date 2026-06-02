@@ -27,12 +27,12 @@ namespace
 
 	bool IsHouseActor(const AActor* Actor)
 	{
-		if (!Actor)
-		{
-			return false;
-		}
+		return Actor && Actor->GetName().Contains(TEXT("House"));
+	}
 
-		return Actor->GetName().Contains(TEXT("House"));
+	bool IsPurgeZoneActor(const AActor* Actor)
+	{
+		return Actor && Actor->GetName().Contains(TEXT("Purge"));
 	}
 
 	bool IsUsefulItemActor(const AActor* Actor)
@@ -67,12 +67,7 @@ namespace
 
 		for (const ABaseItem* Item : Items)
 		{
-			if (!Item)
-			{
-				continue;
-			}
-
-			if (IsWeaponName(Item->GetName()))
+			if (Item && IsWeaponName(Item->GetName()))
 			{
 				return true;
 			}
@@ -176,14 +171,12 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 
 	if (Health)
 	{
-		const bool bLowHealth = Health->GetHealth() <= 3;
-		Blackboard->SetValueAsBool(TEXT("IsLowHealth"), bLowHealth);
+		Blackboard->SetValueAsBool(TEXT("IsLowHealth"), Health->GetHealth() <= 3);
 	}
 
 	if (Stamina)
 	{
-		const bool bLowEnergy = Stamina->GetCurrentStamina() <= 3.f;
-		Blackboard->SetValueAsBool(TEXT("IsLowEnergy"), bLowEnergy);
+		Blackboard->SetValueAsBool(TEXT("IsLowEnergy"), Stamina->GetCurrentStamina() <= 3.f);
 	}
 
 	if (Inventory)
@@ -191,9 +184,29 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 		Blackboard->SetValueAsBool(TEXT("HasWeapon"), InventoryHasWeapon(Inventory));
 	}
 
+	const bool bIsPurgeZone = IsPurgeZoneActor(Actor);
 	const bool bIsZombie = IsZombieActor(Actor);
 	const bool bIsHouse = IsHouseActor(Actor);
 	const bool bIsUsefulItem = IsUsefulItemActor(Actor);
+
+	if (bIsPurgeZone)
+	{
+		if (Stimulus.WasSuccessfullySensed())
+		{
+			UE_LOG(LogTemp, Warning, TEXT("SETTING TargetPurgeZone: %s"), *Actor->GetName());
+			Blackboard->SetValueAsObject(TEXT("TargetPurgeZone"), Actor);
+		}
+		else
+		{
+			if (Blackboard->GetValueAsObject(TEXT("TargetPurgeZone")) == Actor)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("CLEARING TargetPurgeZone: %s"), *Actor->GetName());
+				Blackboard->ClearValue(TEXT("TargetPurgeZone"));
+			}
+		}
+
+		return;
+	}
 
 	if (bIsZombie)
 	{
@@ -204,7 +217,8 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 		}
 		else
 		{
-			// dont clear instantly or it will flicker too much
+			// don't clear TargetEnemy immediately or it will flicker
+			//TODO: fix
 			UE_LOG(LogTemp, Warning, TEXT("LOST TargetEnemy, keeping memory"));
 		}
 
