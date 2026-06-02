@@ -32,7 +32,42 @@ EBTNodeResult::Type UBTTask_FindFleeLocation::ExecuteTask(UBehaviorTreeComponent
 	const FVector PawnLocation = Pawn->GetActorLocation();
 	const FVector EnemyLocation = Enemy->GetActorLocation();
 
-	FVector DirectionAway = PawnLocation - EnemyLocation;
+	UNavigationSystemV1* NavSystem = UNavigationSystemV1::GetCurrent(Pawn->GetWorld());
+
+	if (!NavSystem)
+	{
+		return EBTNodeResult::Failed;
+	}
+
+	// if we see a house, flee there first.
+	AActor* House = Cast<AActor>(Blackboard->GetValueAsObject(TEXT("TargetHouse")));
+
+	if (House)
+	{
+		const float DistanceToHouse = FVector::Dist2D(PawnLocation, House->GetActorLocation());
+
+		if (DistanceToHouse > 350.f)
+		{
+			FNavLocation HouseNavLocation;
+
+			const bool bFoundHouseLocation = NavSystem->ProjectPointToNavigation(House->GetActorLocation(), HouseNavLocation);
+
+			if (bFoundHouseLocation)
+			{
+				Blackboard->SetValueAsVector(TEXT("MoveLocation"), HouseNavLocation.Location);
+
+				DrawDebugLine(Pawn->GetWorld(), PawnLocation, HouseNavLocation.Location, FColor::Cyan, false, 2.f, 0, 4.f);
+				DrawDebugSphere(Pawn->GetWorld(), HouseNavLocation.Location, 100.f, 12, FColor::Cyan, false, 2.f);
+
+				return EBTNodeResult::Succeeded;
+			}
+		}
+	}
+
+	// just flee lol
+	// p sure this causes the player and enemy to endlessly run in the same direction
+	// Fallback: flee away from the enemy.
+	FVector DirectionAway = PawnLocation - EnemyLocation; // this is a hack for enemy blocking player
 	DirectionAway.Z = 0.f;
 
 	if (DirectionAway.IsNearlyZero())
@@ -42,35 +77,47 @@ EBTNodeResult::Type UBTTask_FindFleeLocation::ExecuteTask(UBehaviorTreeComponent
 
 	DirectionAway.Normalize();
 
-	constexpr float FleeDistance = 700.f;
-	constexpr float SearchRadius = 300.f;
+	const float DistanceToEnemy = FVector::Dist2D(PawnLocation, EnemyLocation);
 
-	const FVector DesiredLocation = PawnLocation + DirectionAway * FleeDistance;
+	FVector SideDirection = FVector::CrossProduct(DirectionAway, FVector::UpVector);
+	SideDirection.Z = 0.f;
+	SideDirection.Normalize();
 
-	UNavigationSystemV1* NavSystem = UNavigationSystemV1::GetCurrent(Pawn->GetWorld());
-
-	if (!NavSystem)
+	// randomly choose left or right so we dont always dodge into the same wall
+	if (FMath::RandBool())
 	{
-		return EBTNodeResult::Failed;
+		SideDirection *= -1.f;
 	}
 
-	FNavLocation NavLocation;
+	FVector FleeDirection = DirectionAway;
 
-	const bool bFoundLocation = NavSystem->GetRandomPointInNavigableRadius(
+	if (DistanceToEnemy < 500.f)
+	{
+		FleeDirection = (DirectionAway * 0.6f + SideDirection * 0.8f).GetSafeNormal();
+	}
+
+	constexpr float FleeDistance = 800.f;
+	constexpr float SearchRadius = 350.f;
+
+	const FVector DesiredLocation = PawnLocation + FleeDirection * FleeDistance;
+
+	FNavLocation FleeNavLocation;
+
+	const bool bFoundFleeLocation = NavSystem->GetRandomReachablePointInRadius(
 		DesiredLocation,
 		SearchRadius,
-		NavLocation
+		FleeNavLocation
 	);
 
-	if (!bFoundLocation)
+	if (!bFoundFleeLocation)
 	{
 		return EBTNodeResult::Failed;
 	}
 
-	Blackboard->SetValueAsVector(TEXT("MoveLocation"), NavLocation.Location);
+	Blackboard->SetValueAsVector(TEXT("MoveLocation"), FleeNavLocation.Location);
 
-	DrawDebugLine(Pawn->GetWorld(), PawnLocation, NavLocation.Location, FColor::Green, false, 2.f, 0, 4.f);
-	DrawDebugSphere(Pawn->GetWorld(), NavLocation.Location, 80.f, 12, FColor::Green, false, 2.f);
+	DrawDebugLine(Pawn->GetWorld(), PawnLocation, FleeNavLocation.Location, FColor::Green, false, 2.f, 0, 4.f);
+	DrawDebugSphere(Pawn->GetWorld(), FleeNavLocation.Location, 80.f, 12, FColor::Green, false, 2.f);
 
 	return EBTNodeResult::Succeeded;
 }

@@ -44,10 +44,24 @@ EBTNodeResult::Type UBTTask_GrabTargetItem::ExecuteTask(UBehaviorTreeComponent& 
 	{
 		if (Inventory->GrabItem(SlotIdx, Item))
 		{
+			const FString ItemName = Item->GetName();
+
+			UE_LOG(LogTemp, Warning, TEXT("Grabbed item: %s"), *ItemName);
+
+			if (ItemName.Contains(TEXT("Pistol")) || ItemName.Contains(TEXT("Shotgun")))
+			{
+				Blackboard->SetValueAsBool(TEXT("HasWeapon"), true);
+			}
+
 			Blackboard->ClearValue(TEXT("TargetItem"));
+
 			return EBTNodeResult::Succeeded;
 		}
 	}
 
+	UE_LOG(LogTemp, Warning, TEXT("Failed to grab item: %s, clearing TargetItem"), *Item->GetName());
+	Blackboard->ClearValue(TEXT("TargetItem")); 
+	
 	return EBTNodeResult::Failed;
+
 }
