@@ -56,7 +56,7 @@ namespace
 			Name.Contains(TEXT("Shotgun"));
 	}
 
-	bool InventoryHasWeapon(const UInventoryComponent* Inventory)
+	bool InventoryHasItemContainingName(const UInventoryComponent* Inventory, const FString& ItemName)
 	{
 		if (!Inventory)
 		{
@@ -67,7 +67,7 @@ namespace
 
 		for (const ABaseItem* Item : Items)
 		{
-			if (Item && IsWeaponName(Item->GetName()))
+			if (Item && Item->GetName().Contains(ItemName))
 			{
 				return true;
 			}
@@ -76,9 +76,40 @@ namespace
 		return false;
 	}
 
-	int GetItemPriority(const AActor* ItemActor, const UBlackboardComponent* Blackboard)
+	bool InventoryHasFreeSlot(const UInventoryComponent* Inventory)
 	{
-		if (!ItemActor || !Blackboard)
+		if (!Inventory)
+		{
+			return false;
+		}
+
+		const TArray<ABaseItem*>& Items = Inventory->GetInventory();
+
+		for (const ABaseItem* Item : Items)
+		{
+			if (!Item)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	bool InventoryHasWeapon(const UInventoryComponent* Inventory)
+	{
+		if (!Inventory)
+		{
+			return false;
+		}
+
+		return InventoryHasItemContainingName(Inventory, TEXT("Pistol")) ||
+			InventoryHasItemContainingName(Inventory, TEXT("Shotgun"));
+	}
+
+	int GetItemPriority(const AActor* ItemActor, const UBlackboardComponent* Blackboard, const UInventoryComponent* Inventory)
+	{
+		if (!ItemActor || !Blackboard || !Inventory)
 		{
 			return 0;
 		}
@@ -87,21 +118,44 @@ namespace
 
 		const bool bLowHealth = Blackboard->GetValueAsBool(TEXT("IsLowHealth"));
 		const bool bLowEnergy = Blackboard->GetValueAsBool(TEXT("IsLowEnergy"));
-		const bool bHasWeapon = Blackboard->GetValueAsBool(TEXT("HasWeapon"));
 
+		const bool bHasPistol = InventoryHasItemContainingName(Inventory, TEXT("Pistol"));
+		const bool bHasShotgun = InventoryHasItemContainingName(Inventory, TEXT("Shotgun"));
+		const bool bHasMedkit = InventoryHasItemContainingName(Inventory, TEXT("Medkit"));
+		const bool bHasFood = InventoryHasItemContainingName(Inventory, TEXT("Food"));
+
+		// 1. Pistol above everything
+		if (Name.Contains(TEXT("Pistol")))
+		{
+			return bHasPistol ? 15 : 120;
+		}
+
+		// 2. Shotgun is still useful
+		if (Name.Contains(TEXT("Shotgun")))
+		{
+			return bHasShotgun ? 10 : 100;
+		}
+
+		// 3. First medkit is important, extra medkits only matter when low health
 		if (Name.Contains(TEXT("Medkit")))
 		{
-			return bLowHealth ? 100 : 35;
+			if (!bHasMedkit)
+			{
+				return 90;
+			}
+
+			return bLowHealth ? 80 : 20;
 		}
 
-		if (IsWeaponName(Name))
-		{
-			return bHasWeapon ? 20 : 90;
-		}
-
+		// 4. First food is useful, extra food only matters when stamina is low
 		if (Name.Contains(TEXT("Food")))
 		{
-			return bLowEnergy ? 80 : 40;
+			if (!bHasFood)
+			{
+				return 70;
+			}
+
+			return bLowEnergy ? 60 : 15;
 		}
 
 		return 0;
@@ -229,8 +283,18 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 	{
 		if (Stimulus.WasSuccessfullySensed())
 		{
-			UE_LOG(LogTemp, Warning, TEXT("SETTING TargetHouse: %s"), *Actor->GetName());
-			Blackboard->SetValueAsObject(TEXT("TargetHouse"), Actor);
+			AActor* CurrentTargetHouse = Cast<AActor>(Blackboard->GetValueAsObject(TEXT("TargetHouse")));
+
+			if (!CurrentTargetHouse)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("SETTING TargetHouse: %s"), *Actor->GetName());
+				Blackboard->SetValueAsObject(TEXT("TargetHouse"), Actor);
+				Blackboard->SetValueAsInt(TEXT("HouseSearchCount"), 0);
+			}
+			else
+			{
+				UE_LOG(LogTemp, Warning, TEXT("IGNORING House, already searching: %s"), *CurrentTargetHouse->GetName());
+			}
 		}
 
 		return;
@@ -243,10 +307,17 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 			return;
 		}
 
+		if (!InventoryHasFreeSlot(Inventory))
+		{
+			Blackboard->ClearValue(TEXT("TargetItem"));
+			UE_LOG(LogTemp, Warning, TEXT("Inventory full, ignoring item: %s"), *Actor->GetName());
+			return;
+		}
+
 		AActor* CurrentTargetItem = Cast<AActor>(Blackboard->GetValueAsObject(TEXT("TargetItem")));
 
-		const int NewPriority = GetItemPriority(Actor, Blackboard);
-		const int CurrentPriority = CurrentTargetItem ? GetItemPriority(CurrentTargetItem, Blackboard) : -1;
+		const int NewPriority = GetItemPriority(Actor, Blackboard, Inventory);
+		const int CurrentPriority = CurrentTargetItem ? GetItemPriority(CurrentTargetItem, Blackboard, Inventory) : -1;
 
 		if (!CurrentTargetItem || NewPriority > CurrentPriority)
 		{
