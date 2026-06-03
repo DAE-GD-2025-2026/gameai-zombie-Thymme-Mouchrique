@@ -186,6 +186,20 @@ void UStudentPerceptor::BeginPlay()
 	UE_LOG(LogTemp, Warning, TEXT("Bound perception callback"));
 }
 
+void UStudentPerceptor::MarkHouseSearched(AActor* House)
+{
+	if (!House)
+	{
+		return;
+	}
+
+	if (!SearchedHouses.Contains(House))
+	{
+		SearchedHouses.Add(House);
+		UE_LOG(LogTemp, Warning, TEXT("Marked house as searched: %s"), *House->GetName());
+	}
+}
+
 void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 {
 	if (!Actor)
@@ -283,6 +297,12 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 	{
 		if (Stimulus.WasSuccessfullySensed())
 		{
+			if (SearchedHouses.Contains(Actor))
+			{
+				UE_LOG(LogTemp, Warning, TEXT("IGNORING searched house: %s"), *Actor->GetName());
+				return;
+			}
+
 			AActor* CurrentTargetHouse = Cast<AActor>(Blackboard->GetValueAsObject(TEXT("TargetHouse")));
 
 			if (!CurrentTargetHouse)

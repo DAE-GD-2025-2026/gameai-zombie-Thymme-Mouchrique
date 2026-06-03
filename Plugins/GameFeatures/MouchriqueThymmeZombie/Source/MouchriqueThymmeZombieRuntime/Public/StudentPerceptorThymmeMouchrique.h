@@ -21,6 +21,11 @@ public:
 	
 	virtual void BeginPlay() override;
 
+	// keep track of searched houses 
+	//TODO: private or public? 
+	void MarkHouseSearched(AActor* House);
+
 	UFUNCTION()
 	virtual void OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus);
+	TArray<TObjectPtr<AActor>> SearchedHouses;
 };
