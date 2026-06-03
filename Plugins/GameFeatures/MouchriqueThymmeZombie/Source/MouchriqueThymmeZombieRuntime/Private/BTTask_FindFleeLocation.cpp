@@ -65,8 +65,7 @@ EBTNodeResult::Type UBTTask_FindFleeLocation::ExecuteTask(UBehaviorTreeComponent
 	}
 
 	// just flee lol
-	// p sure this causes the player and enemy to endlessly run in the same direction
-	// Fallback: flee away from the enemy.
+	// p sure this causes the player and enemy to endlessly run in the same direction (thus blocking each other)
 	FVector DirectionAway = PawnLocation - EnemyLocation; // this is a hack for enemy blocking player
 	DirectionAway.Z = 0.f;
 

@@ -40,8 +40,14 @@ EBTNodeResult::Type UBTTask_AttackTargetEnemy::ExecuteTask(UBehaviorTreeComponen
 	FVector DirectionToEnemy = Enemy->GetActorLocation() - Pawn->GetActorLocation();
 	DirectionToEnemy.Z = 0.f;
 
-	if (DirectionToEnemy.IsNearlyZero())
+	// reset target if we lose sight or get too far from the enemy or if dead
+	const float DistanceToEnemy = DirectionToEnemy.Size();
+	const float maxDistance = 700.f;
+	UHealthComponent* EnemyHealth = Enemy->FindComponentByClass<UHealthComponent>();
+
+	if (DirectionToEnemy.IsNearlyZero() || DistanceToEnemy > 700.f || (EnemyHealth && EnemyHealth->IsDead()))
 	{
+		Blackboard->ClearValue(TEXT("TargetEnemy"));
 		return EBTNodeResult::Failed;
 	}
 
