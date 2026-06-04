@@ -95,7 +95,25 @@ namespace
 
 		return false;
 	}
+	int GetFreeSlotCount(const UInventoryComponent* Inventory)
+	{
+		if (!Inventory)
+		{
+			return 0;
+		}
 
+		int FreeSlots = 0;
+
+		for (const ABaseItem* Item : Inventory->GetInventory())
+		{
+			if (!Item)
+			{
+				++FreeSlots;
+			}
+		}
+
+		return FreeSlots;
+	}
 	bool InventoryHasWeapon(const UInventoryComponent* Inventory)
 	{
 		if (!Inventory)
@@ -124,19 +142,41 @@ namespace
 		const bool bHasMedkit = InventoryHasItemContainingName(Inventory, TEXT("Medkit"));
 		const bool bHasFood = InventoryHasItemContainingName(Inventory, TEXT("Food"));
 
-		// 1. Pistol above everything
+		// "basic kit" just means having at least one of each type of item
+		const bool bHasBasicKit = bHasPistol && bHasShotgun && bHasMedkit && bHasFood;
+
+		const int FreeSlots = GetFreeSlotCount(Inventory);
+		const bool bItemIsDuplicate =
+			(Name.Contains(TEXT("Pistol")) && bHasPistol) ||
+			(Name.Contains(TEXT("Shotgun")) && bHasShotgun) ||
+			(Name.Contains(TEXT("Medkit")) && bHasMedkit) ||
+			(Name.Contains(TEXT("Food")) && bHasFood);
+
+		// prevent player gathering duplicate objects if it does not have 1 of each first
+		if (!bHasBasicKit && bItemIsDuplicate)
+		{
+			return 0;
+		}
+
+		// pistol = 120
+		// shotgun = 100
+		// medkit = 90
+		// food = 80
+
+		// extra medkit if low HP = 70
+		// extra food if low stamina = 60
+		// extra weapon duplicate = 20
+
 		if (Name.Contains(TEXT("Pistol")))
 		{
-			return bHasPistol ? 15 : 120;
+			return bHasPistol ? 20 : 120;
 		}
 
-		// 2. Shotgun is still useful
 		if (Name.Contains(TEXT("Shotgun")))
 		{
-			return bHasShotgun ? 10 : 100;
+			return bHasShotgun ? 20 : 100;
 		}
 
-		// 3. First medkit is important, extra medkits only matter when low health
 		if (Name.Contains(TEXT("Medkit")))
 		{
 			if (!bHasMedkit)
@@ -144,18 +184,17 @@ namespace
 				return 90;
 			}
 
-			return bLowHealth ? 80 : 20;
+			return bLowHealth ? 70 : 0;
 		}
 
-		// 4. First food is useful, extra food only matters when stamina is low
 		if (Name.Contains(TEXT("Food")))
 		{
 			if (!bHasFood)
 			{
-				return 70;
+				return 80;
 			}
 
-			return bLowEnergy ? 60 : 15;
+			return bLowEnergy ? 60 : 0;
 		}
 
 		return 0;
@@ -239,7 +278,7 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 
 	if (Health)
 	{
-		Blackboard->SetValueAsBool(TEXT("IsLowHealth"), Health->GetHealth() <= 3);
+		Blackboard->SetValueAsBool(TEXT("IsLowHealth"), Health->GetHealth() <= 5);
 	}
 
 	if (Stamina)

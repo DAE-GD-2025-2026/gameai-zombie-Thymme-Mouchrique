@@ -52,6 +52,15 @@ EBTNodeResult::Type UBTTask_FindHouseSearchLocation::ExecuteTask(UBehaviorTreeCo
 
 	Blackboard->SetValueAsVector(TEXT("MoveLocation"), SearchLocation.Location);
 
+	// rotate towards house
+	FVector DirectionToHouse = House->GetActorLocation() - Pawn->GetActorLocation();
+	DirectionToHouse.Z = 0.f;
+
+	if (!DirectionToHouse.IsNearlyZero())
+	{
+		Pawn->SetActorRotation(DirectionToHouse.Rotation());
+	}
+
 	DrawDebugLine(Pawn->GetWorld(), Pawn->GetActorLocation(), SearchLocation.Location, FColor::Yellow, false, 2.f, 0, 4.f);
 	DrawDebugSphere(Pawn->GetWorld(), SearchLocation.Location, 100.f, 12, FColor::Yellow, false, 2.f);
 
