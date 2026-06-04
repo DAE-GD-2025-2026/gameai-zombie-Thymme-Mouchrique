@@ -42,8 +42,8 @@ EBTNodeResult::Type UBTTask_ClearTargetHouse::ExecuteTask(UBehaviorTreeComponent
 				Perceptor->MarkHouseSearched(TargetHouse);
 			}
 		}
-
 		Blackboard->ClearValue(TEXT("TargetHouse"));
+		Blackboard->ClearValue(TEXT("MoveLocation"));
 		Blackboard->SetValueAsInt(TEXT("HouseSearchCount"), 0);
 	}
 

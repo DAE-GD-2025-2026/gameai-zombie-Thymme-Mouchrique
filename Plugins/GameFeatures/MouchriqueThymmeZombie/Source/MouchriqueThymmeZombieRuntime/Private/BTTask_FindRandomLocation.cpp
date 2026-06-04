@@ -35,13 +35,27 @@ EBTNodeResult::Type UBTTask_FindRandomLocation::ExecuteTask(UBehaviorTreeCompone
 		return EBTNodeResult::Failed;
 	}
 
-	FNavLocation NavLocation;
+	constexpr float ExploreRadius = 900.f;
+	constexpr float MinMoveDistance = 450.f;
 
-	const bool bFound = NavSystem->GetRandomReachablePointInRadius(
-		Pawn->GetActorLocation(),
-		500.f,
-		NavLocation
-	);
+	FNavLocation NavLocation;
+	bool bFound = false;
+
+	for (int Attempt = 0; Attempt < 8; ++Attempt)
+	{
+		if (!NavSystem->GetRandomReachablePointInRadius(Pawn->GetActorLocation(), ExploreRadius, NavLocation))
+		{
+			continue;
+		}
+
+		const float Distance = FVector::Dist2D(Pawn->GetActorLocation(), NavLocation.Location);
+
+		if (Distance >= MinMoveDistance)
+		{
+			bFound = true;
+			break;
+		}
+	}
 
 	if (!bFound)
 	{
