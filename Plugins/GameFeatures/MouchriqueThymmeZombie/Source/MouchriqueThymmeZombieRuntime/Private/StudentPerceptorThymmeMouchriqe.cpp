@@ -199,6 +199,32 @@ namespace
 
 		return 0;
 	}
+	float GetItemScore(const AActor* ItemActor, const UBlackboardComponent* Blackboard, const UInventoryComponent* Inventory, const FVector& FromLocation)
+	{
+		
+		if (!ItemActor)
+		{
+			return 0.f;
+		}
+		
+		// get base usefulness (comes before priority rules)
+		const int Priority = GetItemPriority(ItemActor, Blackboard, Inventory);
+
+		// priority 0 means item is not useful right now
+		// ex: duplicate item before the basic kit is complete
+		if (Priority <= 0)
+		{
+			return 0.f;
+		}
+
+		// very far item should not always beat a nearby useful item
+
+		const float Distance = FVector::Dist2D(FromLocation, ItemActor->GetActorLocation());
+		const float DistancePenalty = Distance / 100.f;
+
+		// final score, higher score = better target
+		return Priority - DistancePenalty;
+	}
 }
 
 UStudentPerceptor::UStudentPerceptor()
@@ -431,6 +457,7 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 			return;
 		}
 
+		// if inventory is full, there is no point in chasing the loot & clear TargetItem
 		if (!InventoryHasFreeSlot(Inventory))
 		{
 			Blackboard->ClearValue(TEXT("TargetItem"));
@@ -440,17 +467,41 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 
 		AActor* CurrentTargetItem = Cast<AActor>(Blackboard->GetValueAsObject(TEXT("TargetItem")));
 
-		const int NewPriority = GetItemPriority(Actor, Blackboard, Inventory);
-		const int CurrentPriority = CurrentTargetItem ? GetItemPriority(CurrentTargetItem, Blackboard, Inventory) : -1;
+		// score newly perceived item
+		// score = item priority - distance penalty
+		// ex: if pistol is high priority, but a very far pistol can lose to a useful nearby item
+		const float NewScore = GetItemScore(Actor, Blackboard, Inventory, OwnerPawn->GetActorLocation());
 
-		if (!CurrentTargetItem || NewPriority > CurrentPriority)
+		// score the current target item 
+		// if there is no current target item use -1 so any valid item can replace it
+		const float CurrentScore = CurrentTargetItem
+			? GetItemScore(CurrentTargetItem, Blackboard, Inventory, OwnerPawn->GetActorLocation())
+			: -1.f;
+
+		// <= 0 means item is useless right now
+		// ex: duplicate item before basic kit is complete, garbage or unwanted dupe
+		if (NewScore <= 0.f)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("SETTING TargetItem: %s | Priority: %d"), *Actor->GetName(), NewPriority);
+			UE_LOG(LogTemp, Warning, TEXT("IGNORING TargetItem: %s | Score <= 0"), *Actor->GetName());
+			return;
+		}
+
+		// if there is no current item, take this one
+		if (!CurrentTargetItem || NewScore > CurrentScore)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("SETTING TargetItem: %s | Score: %.2f"), *Actor->GetName(), NewScore);
 			Blackboard->SetValueAsObject(TEXT("TargetItem"), Actor);
 		}
 		else
 		{
-			UE_LOG(LogTemp, Warning, TEXT("IGNORING TargetItem: %s | Priority: %d <= %d"), *Actor->GetName(), NewPriority, CurrentPriority);
+			UE_LOG(
+				LogTemp,
+				Warning,
+				TEXT("IGNORING TargetItem: %s | Score: %.2f <= %.2f"),
+				*Actor->GetName(),
+				NewScore,
+				CurrentScore
+			);
 		}
 
 		return;
