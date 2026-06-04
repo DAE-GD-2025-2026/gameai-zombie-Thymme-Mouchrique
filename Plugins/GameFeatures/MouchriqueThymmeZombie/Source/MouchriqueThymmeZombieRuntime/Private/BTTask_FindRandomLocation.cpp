@@ -38,9 +38,10 @@ EBTNodeResult::Type UBTTask_FindRandomLocation::ExecuteTask(UBehaviorTreeCompone
 	const FVector PawnLocation = Pawn->GetActorLocation();
 	const FVector LastExploreLocation = Blackboard->GetValueAsVector(TEXT("LastExploreLocation"));
 
-	constexpr float ExploreRadius = 900.f;
-	constexpr float MinDistanceFromPawn = 450.f;
-	constexpr float MinDistanceFromLastExplore = 600.f;
+	//TODO: tweak values
+	constexpr float ExploreRadius = 1400.f;
+	constexpr float MinDistanceFromPawn = 700.f;
+	constexpr float MinDistanceFromLastExplore = 900.f;
 	constexpr int MaxAttempts = 10;
 
 	FNavLocation NavLocation;

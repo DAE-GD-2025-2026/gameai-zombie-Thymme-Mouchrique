@@ -274,6 +274,8 @@ void UStudentPerceptor::MarkHouseSearched(AActor* House)
 		SearchedHouses.Add(House);
 		UE_LOG(LogTemp, Warning, TEXT("Marked house as searched: %s"), *House->GetName());
 	}
+
+	KnownHouses.Remove(House);
 }
 
 void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
@@ -398,23 +400,24 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 	{
 		if (Stimulus.WasSuccessfullySensed())
 		{
-			if (SearchedHouses.Contains(Actor))
+			if (!KnownHouses.Contains(Actor) && !SearchedHouses.Contains(Actor))
 			{
-				UE_LOG(LogTemp, Warning, TEXT("IGNORING searched house: %s"), *Actor->GetName());
-				return;
+				KnownHouses.Add(Actor);
+				UE_LOG(LogTemp, Warning, TEXT("Added known house: %s"), *Actor->GetName());
 			}
 
 			AActor* CurrentTargetHouse = Cast<AActor>(Blackboard->GetValueAsObject(TEXT("TargetHouse")));
 
 			if (!CurrentTargetHouse)
 			{
-				UE_LOG(LogTemp, Warning, TEXT("SETTING TargetHouse: %s"), *Actor->GetName());
-				Blackboard->SetValueAsObject(TEXT("TargetHouse"), Actor);
-				Blackboard->SetValueAsInt(TEXT("HouseSearchCount"), 0);
-			}
-			else
-			{
-				UE_LOG(LogTemp, Warning, TEXT("IGNORING House, already searching: %s"), *CurrentTargetHouse->GetName());
+				AActor* ClosestHouse = GetClosestKnownUnsearchedHouse(OwnerPawn->GetActorLocation());
+
+				if (ClosestHouse)
+				{
+					UE_LOG(LogTemp, Warning, TEXT("SETTING closest TargetHouse: %s"), *ClosestHouse->GetName());
+					Blackboard->SetValueAsObject(TEXT("TargetHouse"), ClosestHouse);
+					Blackboard->SetValueAsInt(TEXT("HouseSearchCount"), 0);
+				}
 			}
 		}
 
@@ -452,4 +455,29 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 
 		return;
 	}
+}
+
+AActor* UStudentPerceptor::GetClosestKnownUnsearchedHouse(const FVector& FromLocation) const
+{
+	// returns closest unsearched house from known houses, but needs to be spotted to be added into known houses
+	AActor* ClosestHouse = nullptr;
+	float ClosestDistanceSq = TNumericLimits<float>::Max();
+
+	for (AActor* House : KnownHouses)
+	{
+		if (!House || SearchedHouses.Contains(House))
+		{
+			continue;
+		}
+
+		const float DistanceSq = FVector::DistSquared2D(FromLocation, House->GetActorLocation());
+
+		if (DistanceSq < ClosestDistanceSq)
+		{
+			ClosestDistanceSq = DistanceSq;
+			ClosestHouse = House;
+		}
+	}
+
+	return ClosestHouse;
 }

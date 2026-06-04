@@ -22,12 +22,19 @@ public:
 	virtual void BeginPlay() override;
 	virtual void TickComponent(float DeltaTime,ELevelTick TickType,FActorComponentTickFunction* ThisTickFunction) override;
 
-	// keep track of searched houses 
+	// keep track of searched and unsearched houses in the area
 	//TODO: private or public? 
 	void MarkHouseSearched(AActor* House);
+	AActor* GetClosestKnownUnsearchedHouse(const FVector& FromLocation) const;
 
 	UFUNCTION()
 	virtual void OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus);
+
+private:
+	UPROPERTY()
+	TArray<TObjectPtr<AActor>> KnownHouses;
+
+	UPROPERTY()
 	TArray<TObjectPtr<AActor>> SearchedHouses;
 
 	// hack fix for player getting hit by an enemy up their butt but not sensing it

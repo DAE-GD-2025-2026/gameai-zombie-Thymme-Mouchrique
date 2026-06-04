@@ -4,8 +4,90 @@
 #include "BehaviorTree/BlackboardComponent.h"
 #include "GameFramework/Pawn.h"
 
+#include "Common/HealthComponent.h"
 #include "Common/InventoryComponent.h"
 #include "Items/BaseItem.h"
+
+
+// helper functions
+namespace
+{
+	bool IsPistol(const FString& ItemName)
+	{
+		return ItemName.Contains(TEXT("Pistol"));
+	}
+
+	bool IsShotgun(const FString& ItemName)
+	{
+		return ItemName.Contains(TEXT("Shotgun"));
+	}
+
+	bool IsUsableWeapon(const ABaseItem* Item)
+	{
+		if (!Item)
+		{
+			return false;
+		}
+
+		const FString ItemName = Item->GetName();
+
+		return (IsPistol(ItemName) || IsShotgun(ItemName)) &&
+			Item->GetValue() > 0;
+	}
+
+	bool TryUseWeapon(UInventoryComponent* Inventory,const TArray<ABaseItem*>& Items,
+		const FString& WantedWeaponName,UBlackboardComponent* Blackboard)
+	{
+		if (!Inventory)
+		{
+			return false;
+		}
+
+		for (int SlotIdx = 0; SlotIdx < Items.Num(); ++SlotIdx)
+		{
+			ABaseItem* Item = Items[SlotIdx];
+
+			if (!IsUsableWeapon(Item))
+			{
+				continue;
+			}
+
+			const FString ItemName = Item->GetName();
+
+			if (!ItemName.Contains(WantedWeaponName))
+			{
+				continue;
+			}
+
+			if (Inventory->UseItem(SlotIdx))
+			{
+				UE_LOG(LogTemp, Warning, TEXT("Attacked enemy using: %s"), *ItemName);
+
+				if (Item->GetValue() <= 0)
+				{
+					Inventory->RemoveItem(SlotIdx);
+				}
+
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	bool HasAnyUsableWeapon(const TArray<ABaseItem*>& Items)
+	{
+		for (const ABaseItem* Item : Items)
+		{
+			if (IsUsableWeapon(Item))
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+}
 
 UBTTask_AttackTargetEnemy::UBTTask_AttackTargetEnemy()
 {
@@ -42,10 +124,13 @@ EBTNodeResult::Type UBTTask_AttackTargetEnemy::ExecuteTask(UBehaviorTreeComponen
 
 	// reset target if we lose sight or get too far from the enemy or if dead
 	const float DistanceToEnemy = DirectionToEnemy.Size();
-	const float maxDistance = 700.f;
+	constexpr float MaxEnemyMemoryDistance = 1800.f;
+
 	UHealthComponent* EnemyHealth = Enemy->FindComponentByClass<UHealthComponent>();
 
-	if (DirectionToEnemy.IsNearlyZero() || DistanceToEnemy > 700.f || (EnemyHealth && EnemyHealth->IsDead()))
+	if (DirectionToEnemy.IsNearlyZero() ||
+		DistanceToEnemy > MaxEnemyMemoryDistance ||
+		(EnemyHealth && EnemyHealth->IsDead()))
 	{
 		Blackboard->ClearValue(TEXT("TargetEnemy"));
 		return EBTNodeResult::Failed;
@@ -53,46 +138,42 @@ EBTNodeResult::Type UBTTask_AttackTargetEnemy::ExecuteTask(UBehaviorTreeComponen
 
 	DirectionToEnemy.Normalize();
 
+	// face enemy
 	Pawn->SetActorRotation(DirectionToEnemy.Rotation());
 
 	const TArray<ABaseItem*>& Items = Inventory->GetInventory();
 
-	for (int SlotIdx = 0; SlotIdx < Items.Num(); ++SlotIdx)
+	if (!HasAnyUsableWeapon(Items))
 	{
-		ABaseItem* Item = Items[SlotIdx];
+		Blackboard->SetValueAsBool(TEXT("HasWeapon"), false);
+		return EBTNodeResult::Failed;
+	}
 
-		if (!Item)
+	constexpr float ShotgunPreferredDistance = 450.f;
+
+	if (DistanceToEnemy <= ShotgunPreferredDistance)
+	{
+		// if enemy is close use shotgun first because spread is useful up close.
+		if (TryUseWeapon(Inventory, Items, TEXT("Shotgun"), Blackboard))
 		{
-			continue;
+			return EBTNodeResult::Succeeded;
 		}
 
-		const FString ItemName = Item->GetName();
-
-		const bool bIsWeapon =
-			ItemName.Contains(TEXT("Pistol")) ||
-			ItemName.Contains(TEXT("Shotgun"));
-
-		if (!bIsWeapon)
+		if (TryUseWeapon(Inventory, Items, TEXT("Pistol"), Blackboard))
 		{
-			continue;
+			return EBTNodeResult::Succeeded;
+		}
+	}
+	else
+	{
+		// if enemy is farther away use pistol first because it is more accurate.
+		if (TryUseWeapon(Inventory, Items, TEXT("Pistol"), Blackboard))
+		{
+			return EBTNodeResult::Succeeded;
 		}
 
-		if (Item->GetValue() <= 0)
+		if (TryUseWeapon(Inventory, Items, TEXT("Shotgun"), Blackboard))
 		{
-			Inventory->RemoveItem(SlotIdx);
-			continue;
-		}
-
-		// use item = shoot in this case
-		if (Inventory->UseItem(SlotIdx))
-		{
-			UE_LOG(LogTemp, Warning, TEXT("Attacked enemy using: %s"), *ItemName);
-
-			if (Item->GetValue() <= 0)
-			{
-				Inventory->RemoveItem(SlotIdx);
-			}
-
 			return EBTNodeResult::Succeeded;
 		}
 	}
