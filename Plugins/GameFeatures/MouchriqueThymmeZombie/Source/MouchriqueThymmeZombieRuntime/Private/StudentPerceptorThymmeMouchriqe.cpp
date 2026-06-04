@@ -1,5 +1,7 @@
 ﻿#include "StudentPerceptorThymmeMouchrique.h"
 
+#include "NavigationSystem.h"
+
 #include "AIController.h"
 #include "BehaviorTree/BlackboardComponent.h"
 #include "Perception/AIPerceptionComponent.h"
@@ -7,56 +9,59 @@
 #include "Common/HealthComponent.h"
 #include "Common/StaminaComponent.h"
 #include "Common/InventoryComponent.h"
+
 #include "Items/BaseItem.h"
+#include "Items/ItemType.h"
+#include "Zombies/BaseZombie.h"
+#include "Village/House/House.h"
+#include "PurgeZones/PurgeZone.h"
 
 namespace
 {
 	bool IsZombieActor(const AActor* Actor)
 	{
-		if (!Actor)
-		{
-			return false;
-		}
-
-		const FString Name = Actor->GetName();
-
-		return Name.Contains(TEXT("Zombie")) ||
-			Name.Contains(TEXT("Runner")) ||
-			Name.Contains(TEXT("Heavy"));
+		return Actor && Cast<ABaseZombie>(Actor) != nullptr;
 	}
 
 	bool IsHouseActor(const AActor* Actor)
 	{
-		return Actor && Actor->GetName().Contains(TEXT("House"));
+		return Actor && Cast<AHouse>(Actor) != nullptr;
 	}
 
 	bool IsPurgeZoneActor(const AActor* Actor)
 	{
-		return Actor && Actor->GetName().Contains(TEXT("Purge"));
+		return Actor && Cast<APurgeZone>(Actor) != nullptr;
 	}
 
 	bool IsUsefulItemActor(const AActor* Actor)
 	{
-		if (!Actor)
+		const ABaseItem* Item = Cast<ABaseItem>(Actor);
+
+		if (!Item)
 		{
 			return false;
 		}
 
-		const FString Name = Actor->GetName();
+		switch (Item->GetItemType())
+		{
+		case EItemType::Medkit:
+		case EItemType::Food:
+		case EItemType::Pistol:
+		case EItemType::Shotgun:
+			return true;
 
-		return Name.Contains(TEXT("Medkit")) ||
-			Name.Contains(TEXT("Food")) ||
-			Name.Contains(TEXT("Pistol")) ||
-			Name.Contains(TEXT("Shotgun"));
+		default:
+			return false;
+		}
 	}
 
-	bool IsWeaponName(const FString& Name)
+	bool IsWeaponItemType(EItemType ItemType)
 	{
-		return Name.Contains(TEXT("Pistol")) ||
-			Name.Contains(TEXT("Shotgun"));
+		return ItemType == EItemType::Pistol ||
+			ItemType == EItemType::Shotgun;
 	}
 
-	bool InventoryHasItemContainingName(const UInventoryComponent* Inventory, const FString& ItemName)
+	bool InventoryHasItemOfType(const UInventoryComponent* Inventory, EItemType WantedItemType)
 	{
 		if (!Inventory)
 		{
@@ -67,7 +72,7 @@ namespace
 
 		for (const ABaseItem* Item : Items)
 		{
-			if (Item && Item->GetName().Contains(ItemName))
+			if (Item && Item->GetItemType() == WantedItemType)
 			{
 				return true;
 			}
@@ -95,6 +100,7 @@ namespace
 
 		return false;
 	}
+
 	int GetFreeSlotCount(const UInventoryComponent* Inventory)
 	{
 		if (!Inventory)
@@ -114,6 +120,7 @@ namespace
 
 		return FreeSlots;
 	}
+
 	bool InventoryHasWeapon(const UInventoryComponent* Inventory)
 	{
 		if (!Inventory)
@@ -121,8 +128,8 @@ namespace
 			return false;
 		}
 
-		return InventoryHasItemContainingName(Inventory, TEXT("Pistol")) ||
-			InventoryHasItemContainingName(Inventory, TEXT("Shotgun"));
+		return InventoryHasItemOfType(Inventory, EItemType::Pistol) ||
+			InventoryHasItemOfType(Inventory, EItemType::Shotgun);
 	}
 
 	int GetItemPriority(const AActor* ItemActor, const UBlackboardComponent* Blackboard, const UInventoryComponent* Inventory)
@@ -132,25 +139,32 @@ namespace
 			return 0;
 		}
 
-		const FString Name = ItemActor->GetName();
+		const ABaseItem* Item = Cast<ABaseItem>(ItemActor);
+
+		if (!Item)
+		{
+			return 0;
+		}
+
+		const EItemType ItemType = Item->GetItemType();
 
 		const bool bLowHealth = Blackboard->GetValueAsBool(TEXT("IsLowHealth"));
 		const bool bLowEnergy = Blackboard->GetValueAsBool(TEXT("IsLowEnergy"));
 
-		const bool bHasPistol = InventoryHasItemContainingName(Inventory, TEXT("Pistol"));
-		const bool bHasShotgun = InventoryHasItemContainingName(Inventory, TEXT("Shotgun"));
-		const bool bHasMedkit = InventoryHasItemContainingName(Inventory, TEXT("Medkit"));
-		const bool bHasFood = InventoryHasItemContainingName(Inventory, TEXT("Food"));
+		const bool bHasPistol = InventoryHasItemOfType(Inventory, EItemType::Pistol);
+		const bool bHasShotgun = InventoryHasItemOfType(Inventory, EItemType::Shotgun);
+		const bool bHasMedkit = InventoryHasItemOfType(Inventory, EItemType::Medkit);
+		const bool bHasFood = InventoryHasItemOfType(Inventory, EItemType::Food);
 
 		// "basic kit" just means having at least one of each type of item
 		const bool bHasBasicKit = bHasPistol && bHasShotgun && bHasMedkit && bHasFood;
 
 		const int FreeSlots = GetFreeSlotCount(Inventory);
 		const bool bItemIsDuplicate =
-			(Name.Contains(TEXT("Pistol")) && bHasPistol) ||
-			(Name.Contains(TEXT("Shotgun")) && bHasShotgun) ||
-			(Name.Contains(TEXT("Medkit")) && bHasMedkit) ||
-			(Name.Contains(TEXT("Food")) && bHasFood);
+			(ItemType == EItemType::Pistol && bHasPistol) ||
+			(ItemType == EItemType::Shotgun && bHasShotgun) ||
+			(ItemType == EItemType::Medkit && bHasMedkit) ||
+			(ItemType == EItemType::Food && bHasFood);
 
 		// prevent player gathering duplicate objects if it does not have 1 of each first
 		if (!bHasBasicKit && bItemIsDuplicate)
@@ -167,17 +181,17 @@ namespace
 		// extra food if low stamina = 60
 		// extra weapon duplicate = 20
 
-		if (Name.Contains(TEXT("Pistol")))
+		if (ItemType == EItemType::Pistol)
 		{
 			return bHasPistol ? 20 : 120;
 		}
 
-		if (Name.Contains(TEXT("Shotgun")))
+		if (ItemType == EItemType::Shotgun)
 		{
 			return bHasShotgun ? 20 : 100;
 		}
 
-		if (Name.Contains(TEXT("Medkit")))
+		if (ItemType == EItemType::Medkit)
 		{
 			if (!bHasMedkit)
 			{
@@ -187,7 +201,7 @@ namespace
 			return bLowHealth ? 70 : 0;
 		}
 
-		if (Name.Contains(TEXT("Food")))
+		if (ItemType == EItemType::Food)
 		{
 			if (!bHasFood)
 			{
@@ -199,14 +213,14 @@ namespace
 
 		return 0;
 	}
+
 	float GetItemScore(const AActor* ItemActor, const UBlackboardComponent* Blackboard, const UInventoryComponent* Inventory, const FVector& FromLocation)
 	{
-		
 		if (!ItemActor)
 		{
 			return 0.f;
 		}
-		
+
 		// get base usefulness (comes before priority rules)
 		const int Priority = GetItemPriority(ItemActor, Blackboard, Inventory);
 
@@ -259,10 +273,48 @@ void UStudentPerceptor::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 
 	APawn* OwnerPawn = Cast<APawn>(GetOwner());
+
+	if (!OwnerPawn)
+	{
+		return;
+	}
+
 	UHealthComponent* Health = OwnerPawn->FindComponentByClass<UHealthComponent>();
 
-	if (!OwnerPawn || !Health)
+	if (!Health)
 	{
+		return;
+	}
+
+	// hack fix for not finding anything
+	// do a 360 scan on spawn to find houses on spawn
+	if (!bDidInitialScan)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[STUDENTPERCEPTOR] initiating spawn scan."));
+
+		InitialScanTimer += DeltaTime;
+
+		constexpr float ScanDuration = 2.0f;
+		constexpr float ScanSpeedDegreesPerSecond = 180.f;
+
+		OwnerPawn->AddActorWorldRotation(FRotator(0.f, ScanSpeedDegreesPerSecond * DeltaTime, 0.f));
+
+		if (InitialScanTimer >= ScanDuration)
+		{
+			bDidInitialScan = true;
+			UE_LOG(LogTemp, Warning, TEXT("[STUDENTPERCEPTOR] Finished initial spawn scan."));
+
+			AAIController* AIController = Cast<AAIController>(OwnerPawn->GetController());
+			UBlackboardComponent* Blackboard = AIController ? AIController->GetBlackboardComponent() : nullptr;
+
+			if (Blackboard)
+			{
+				Blackboard->SetValueAsBool(TEXT("HasFinishedInitialScan"), true);
+			}
+
+			TryUpdateTargetHouse();
+		}
+
 		return;
 	}
 
@@ -279,15 +331,29 @@ void UStudentPerceptor::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 
 	if (bTookDamage && CurrentTime - LastDamageReactionTime > 0.75f)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[STUDENTPERCEPTOR] Health dropped. Turning around to scan for attacker."));
+		AAIController* AIController = Cast<AAIController>(OwnerPawn->GetController());
+		UBlackboardComponent* Blackboard = AIController ? AIController->GetBlackboardComponent() : nullptr;
 
-		OwnerPawn->AddActorWorldRotation(FRotator(0.f, 180.f, 0.f));
+		const bool bAlreadyHasEnemy = Blackboard && Blackboard->GetValueAsObject(TEXT("TargetEnemy")) != nullptr;
+
+		if (!bAlreadyHasEnemy)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[STUDENTPERCEPTOR] Health dropped. No enemy known, turning around to scan."));
+
+			OwnerPawn->AddActorWorldRotation(FRotator(0.f, 180.f, 0.f));
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[STUDENTPERCEPTOR] Health dropped, but enemy already known. Not turning around."));
+		}
 
 		LastDamageReactionTime = CurrentTime;
 	}
 
 	LastHealth = CurrentHealth;
 }
+
+
 void UStudentPerceptor::MarkHouseSearched(AActor* House)
 {
 	if (!House)
@@ -300,10 +366,121 @@ void UStudentPerceptor::MarkHouseSearched(AActor* House)
 		SearchedHouses.Add(House);
 		UE_LOG(LogTemp, Warning, TEXT("Marked house as searched: %s"), *House->GetName());
 	}
-
+	// remove house coz it already been searched
 	KnownHouses.Remove(House);
+
+	LastVillageLocation = House->GetActorLocation();
+	bHasLastVillageLocation = true;
+
+	APawn* OwnerPawn = Cast<APawn>(GetOwner());
+
+	if (!OwnerPawn)
+	{
+		return;
+	}
+
+	AAIController* AIController = Cast<AAIController>(OwnerPawn->GetController());
+
+	if (!AIController)
+	{
+		return;
+	}
+
+	UBlackboardComponent* Blackboard = AIController->GetBlackboardComponent();
+
+	if (!Blackboard)
+	{
+		return;
+	}
+
+	if (Blackboard->GetValueAsObject(TEXT("TargetHouse")) == House)
+	{
+		Blackboard->ClearValue(TEXT("TargetHouse"));
+	}
+
+	if (!TryUpdateTargetHouse())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("No known unsearched houses left. Village exploration should continue."));
+	}
 }
 
+bool UStudentPerceptor::TryUpdateTargetHouse()
+{
+	APawn* OwnerPawn = Cast<APawn>(GetOwner());
+
+	if (!OwnerPawn)
+	{
+		return false;
+	}
+
+	AAIController* AIController = Cast<AAIController>(OwnerPawn->GetController());
+
+	if (!AIController)
+	{
+		return false;
+	}
+
+	UBlackboardComponent* Blackboard = AIController->GetBlackboardComponent();
+
+	if (!Blackboard)
+	{
+		return false;
+	}
+
+	AActor* ClosestHouse = GetClosestKnownUnsearchedHouse(OwnerPawn->GetActorLocation());
+
+	if (!ClosestHouse)
+	{
+		Blackboard->ClearValue(TEXT("TargetHouse"));
+		return false;
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("SETTING TargetHouse from known houses: %s"), *ClosestHouse->GetName());
+
+	Blackboard->SetValueAsObject(TEXT("TargetHouse"), ClosestHouse);
+	Blackboard->SetValueAsInt(TEXT("HouseSearchCount"), 0);
+
+	return true;
+}
+bool UStudentPerceptor::GetVillageExploreLocation(FVector& OutLocation) const
+{
+	if (!bHasLastVillageLocation)
+	{
+		return false;
+	}
+
+	UWorld* World = GetWorld();
+
+	if (!World)
+	{
+		return false;
+	}
+
+	UNavigationSystemV1* NavSystem = UNavigationSystemV1::GetCurrent(World);
+
+	if (!NavSystem)
+	{
+		return false;
+	}
+
+	FNavLocation NavLocation;
+
+	constexpr float VillageExploreRadius = 1800.f;
+
+	const bool bFoundLocation = NavSystem->GetRandomReachablePointInRadius(
+		LastVillageLocation,
+		VillageExploreRadius,
+		NavLocation
+	);
+
+	if (!bFoundLocation)
+	{
+		return false;
+	}
+
+	OutLocation = NavLocation.Location;
+	return true;
+}
 void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 {
 	if (!Actor)
@@ -426,6 +603,9 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 	{
 		if (Stimulus.WasSuccessfullySensed())
 		{
+			LastVillageLocation = Actor->GetActorLocation();
+			bHasLastVillageLocation = true;
+
 			if (!KnownHouses.Contains(Actor) && !SearchedHouses.Contains(Actor))
 			{
 				KnownHouses.Add(Actor);
@@ -434,16 +614,9 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 
 			AActor* CurrentTargetHouse = Cast<AActor>(Blackboard->GetValueAsObject(TEXT("TargetHouse")));
 
-			if (!CurrentTargetHouse)
+			if (!CurrentTargetHouse || SearchedHouses.Contains(CurrentTargetHouse))
 			{
-				AActor* ClosestHouse = GetClosestKnownUnsearchedHouse(OwnerPawn->GetActorLocation());
-
-				if (ClosestHouse)
-				{
-					UE_LOG(LogTemp, Warning, TEXT("SETTING closest TargetHouse: %s"), *ClosestHouse->GetName());
-					Blackboard->SetValueAsObject(TEXT("TargetHouse"), ClosestHouse);
-					Blackboard->SetValueAsInt(TEXT("HouseSearchCount"), 0);
-				}
+				TryUpdateTargetHouse();
 			}
 		}
 

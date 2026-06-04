@@ -30,6 +30,8 @@ public:
 	UFUNCTION()
 	virtual void OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus);
 
+	bool TryUpdateTargetHouse();
+	bool GetVillageExploreLocation(FVector& OutLocation) const;
 private:
 	UPROPERTY()
 	TArray<TObjectPtr<AActor>> KnownHouses;
@@ -40,4 +42,11 @@ private:
 	// hack fix for player getting hit by an enemy up their butt but not sensing it
 	int LastHealth = -1;
 	float LastDamageReactionTime = -1000.f;
+
+	bool bDidInitialScan = false;
+	float InitialScanTimer = 0.f;
+
+	// village 
+	FVector LastVillageLocation = FVector::ZeroVector;
+	bool bHasLastVillageLocation = false;
 };
