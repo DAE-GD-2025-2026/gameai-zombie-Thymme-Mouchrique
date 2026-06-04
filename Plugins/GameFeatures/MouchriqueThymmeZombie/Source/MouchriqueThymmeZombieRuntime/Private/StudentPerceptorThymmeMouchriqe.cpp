@@ -23,6 +23,11 @@ namespace
 		return Actor && Cast<ABaseZombie>(Actor) != nullptr;
 	}
 
+	bool IsRunnerZombieActor(const AActor* Actor)
+	{
+		return Actor && Actor->GetName().Contains(TEXT("Runner"));
+	}
+
 	bool IsHouseActor(const AActor* Actor)
 	{
 		return Actor && Cast<AHouse>(Actor) != nullptr;
@@ -81,6 +86,97 @@ namespace
 		return false;
 	}
 
+	bool InventoryHasWeapon(const UInventoryComponent* Inventory)
+	{
+		if (!Inventory)
+		{
+			return false;
+		}
+
+		return InventoryHasItemOfType(Inventory, EItemType::Pistol) ||
+			InventoryHasItemOfType(Inventory, EItemType::Shotgun);
+	}
+
+	void SetBasicEnemyDecisionBlackboard(UBlackboardComponent* Blackboard, const UInventoryComponent* Inventory)
+	{
+		if (!Blackboard)
+		{
+			return;
+		}
+
+		const bool bHasWeapon = InventoryHasWeapon(Inventory);
+		const bool bLowHealth = Blackboard->GetValueAsBool(TEXT("IsLowHealth"));
+
+		Blackboard->SetValueAsBool(TEXT("ShouldAttackEnemy"), bHasWeapon);
+		Blackboard->SetValueAsBool(TEXT("ShouldFleeEnemy"), !bHasWeapon || bLowHealth);
+	}
+
+	void UpdateEnemyDecisionBlackboard(
+		UBlackboardComponent* Blackboard,
+		APawn* OwnerPawn,
+		const AActor* Enemy,
+		const UInventoryComponent* Inventory)
+	{
+		if (!Blackboard || !OwnerPawn || !Enemy)
+		{
+			return;
+		}
+
+		const bool bIsRunner = IsRunnerZombieActor(Enemy);
+		const bool bHasWeapon = InventoryHasWeapon(Inventory);
+		const bool bLowHealth = Blackboard->GetValueAsBool(TEXT("IsLowHealth"));
+		const bool bHasTargetHouse = Blackboard->GetValueAsObject(TEXT("TargetHouse")) != nullptr;
+
+		bool bShouldFleeToHouse = false;
+		bool bShouldAttackEnemy = false;
+		bool bShouldFleeEnemy = false;
+
+		if (bIsRunner)
+		{
+			// Runner is faster than the player
+			// Best answer: hide in a house if we know one
+			if (bHasTargetHouse)
+			{
+				bShouldFleeToHouse = true;
+			}
+			else if (bHasWeapon)
+			{
+				bShouldAttackEnemy = true;
+			}
+			else
+			{
+				bShouldFleeEnemy = true;
+			}
+		}
+		else
+		{
+			// Normal/heavy zombies are less urgent
+			if (bHasWeapon && !bLowHealth)
+			{
+				bShouldAttackEnemy = true;
+			}
+			else
+			{
+				bShouldFleeEnemy = true;
+			}
+		}
+
+		Blackboard->SetValueAsBool(TEXT("IsRunnerEnemy"), bIsRunner);
+		Blackboard->SetValueAsBool(TEXT("ShouldFleeToHouse"), bShouldFleeToHouse);
+		Blackboard->SetValueAsBool(TEXT("ShouldAttackEnemy"), bShouldAttackEnemy);
+		Blackboard->SetValueAsBool(TEXT("ShouldFleeEnemy"), bShouldFleeEnemy);
+
+		UE_LOG(
+			LogTemp,
+			Warning,
+			TEXT("[EnemyDecision] Runner=%s | FleeToHouse=%s | Attack=%s | Flee=%s"),
+			bIsRunner ? TEXT("true") : TEXT("false"),
+			bShouldFleeToHouse ? TEXT("true") : TEXT("false"),
+			bShouldAttackEnemy ? TEXT("true") : TEXT("false"),
+			bShouldFleeEnemy ? TEXT("true") : TEXT("false")
+		);
+	}
+
 	bool InventoryHasFreeSlot(const UInventoryComponent* Inventory)
 	{
 		if (!Inventory)
@@ -119,17 +215,6 @@ namespace
 		}
 
 		return FreeSlots;
-	}
-
-	bool InventoryHasWeapon(const UInventoryComponent* Inventory)
-	{
-		if (!Inventory)
-		{
-			return false;
-		}
-
-		return InventoryHasItemOfType(Inventory, EItemType::Pistol) ||
-			InventoryHasItemOfType(Inventory, EItemType::Shotgun);
 	}
 
 	int GetItemPriority(const AActor* ItemActor, const UBlackboardComponent* Blackboard, const UInventoryComponent* Inventory)
@@ -353,7 +438,6 @@ void UStudentPerceptor::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 	LastHealth = CurrentHealth;
 }
 
-
 void UStudentPerceptor::MarkHouseSearched(AActor* House)
 {
 	if (!House)
@@ -366,6 +450,7 @@ void UStudentPerceptor::MarkHouseSearched(AActor* House)
 		SearchedHouses.Add(House);
 		UE_LOG(LogTemp, Warning, TEXT("Marked house as searched: %s"), *House->GetName());
 	}
+
 	// remove house coz it already been searched
 	KnownHouses.Remove(House);
 
@@ -442,6 +527,7 @@ bool UStudentPerceptor::TryUpdateTargetHouse()
 
 	return true;
 }
+
 bool UStudentPerceptor::GetVillageExploreLocation(FVector& OutLocation) const
 {
 	if (!bHasLastVillageLocation)
@@ -481,14 +567,13 @@ bool UStudentPerceptor::GetVillageExploreLocation(FVector& OutLocation) const
 	OutLocation = NavLocation.Location;
 	return true;
 }
+
 void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 {
 	if (!Actor)
 	{
 		return;
 	}
-
-	UE_LOG(LogTemp, Warning, TEXT("Perceived Actor: %s"), *Actor->GetName());
 
 	APawn* OwnerPawn = Cast<APawn>(GetOwner());
 
@@ -562,12 +647,19 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 		// read new enemy from perception but only update blackboard if new enemy is closer than current one
 		if (Stimulus.WasSuccessfullySensed())
 		{
+			// before deciding what to do with a runner, try to make sure we have a known house target
+			// if no known house exists, this does nothing
+			TryUpdateTargetHouse();
+
 			AActor* CurrentEnemy = Cast<AActor>(Blackboard->GetValueAsObject(TEXT("TargetEnemy")));
 
 			if (!CurrentEnemy)
 			{
 				UE_LOG(LogTemp, Warning, TEXT("SETTING TargetEnemy: %s"), *Actor->GetName());
 				Blackboard->SetValueAsObject(TEXT("TargetEnemy"), Actor);
+
+				SetBasicEnemyDecisionBlackboard(Blackboard, Inventory);
+				UpdateEnemyDecisionBlackboard(Blackboard, OwnerPawn, Actor, Inventory);
 				return;
 			}
 
@@ -585,10 +677,16 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 			{
 				UE_LOG(LogTemp, Warning, TEXT("SWITCHING TargetEnemy to closer enemy: %s"), *Actor->GetName());
 				Blackboard->SetValueAsObject(TEXT("TargetEnemy"), Actor);
+
+				SetBasicEnemyDecisionBlackboard(Blackboard, Inventory);
+				UpdateEnemyDecisionBlackboard(Blackboard, OwnerPawn, Actor, Inventory);
 			}
 			else
 			{
 				UE_LOG(LogTemp, Warning, TEXT("KEEPING current TargetEnemy: %s"), *CurrentEnemy->GetName());
+
+				SetBasicEnemyDecisionBlackboard(Blackboard, Inventory);
+				UpdateEnemyDecisionBlackboard(Blackboard, OwnerPawn, CurrentEnemy, Inventory);
 			}
 		}
 		else
