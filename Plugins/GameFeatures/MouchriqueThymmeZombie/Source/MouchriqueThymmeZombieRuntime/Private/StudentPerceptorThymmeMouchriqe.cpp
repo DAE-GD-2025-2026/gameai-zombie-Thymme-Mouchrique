@@ -203,28 +203,65 @@ namespace
 
 UStudentPerceptor::UStudentPerceptor()
 {
-	PrimaryComponentTick.bCanEverTick = false;
+	PrimaryComponentTick.bCanEverTick = true;
 }
 
 void UStudentPerceptor::BeginPlay()
 {
 	Super::BeginPlay();
 
-	UE_LOG(LogTemp, Warning, TEXT("StudentPerceptor BeginPlay"));
-
 	UAIPerceptionComponent* PerceptionComp = GetOwner()->FindComponentByClass<UAIPerceptionComponent>();
 
 	if (!PerceptionComp)
 	{
-		UE_LOG(LogTemp, Error, TEXT("No PerceptionComponent found"));
 		return;
 	}
 
-	PerceptionComp->OnTargetPerceptionUpdated.AddDynamic(this, &UStudentPerceptor::OnPerceptionUpdated);
+	if (APawn* OwnerPawn = Cast<APawn>(GetOwner()))
+	{
+		if (UHealthComponent* Health = OwnerPawn->FindComponentByClass<UHealthComponent>())
+		{
+			LastHealth = Health->GetHealth();
+		}
+	}
 
-	UE_LOG(LogTemp, Warning, TEXT("Bound perception callback"));
+	PerceptionComp->OnTargetPerceptionUpdated.AddDynamic(this, &UStudentPerceptor::OnPerceptionUpdated);
 }
 
+void UStudentPerceptor::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	APawn* OwnerPawn = Cast<APawn>(GetOwner());
+	UHealthComponent* Health = OwnerPawn->FindComponentByClass<UHealthComponent>();
+
+	if (!OwnerPawn || !Health)
+	{
+		return;
+	}
+
+	const int CurrentHealth = Health->GetHealth();
+
+	if (LastHealth < 0)
+	{
+		LastHealth = CurrentHealth;
+		return;
+	}
+
+	const bool bTookDamage = CurrentHealth < LastHealth;
+	const float CurrentTime = GetWorld()->GetTimeSeconds();
+
+	if (bTookDamage && CurrentTime - LastDamageReactionTime > 0.75f)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[STUDENTPERCEPTOR] Health dropped. Turning around to scan for attacker."));
+
+		OwnerPawn->AddActorWorldRotation(FRotator(0.f, 180.f, 0.f));
+
+		LastDamageReactionTime = CurrentTime;
+	}
+
+	LastHealth = CurrentHealth;
+}
 void UStudentPerceptor::MarkHouseSearched(AActor* House)
 {
 	if (!House)

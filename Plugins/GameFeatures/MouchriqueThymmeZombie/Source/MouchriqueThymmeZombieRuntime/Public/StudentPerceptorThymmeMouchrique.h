@@ -20,6 +20,7 @@ public:
 	UStudentPerceptor();
 	
 	virtual void BeginPlay() override;
+	virtual void TickComponent(float DeltaTime,ELevelTick TickType,FActorComponentTickFunction* ThisTickFunction) override;
 
 	// keep track of searched houses 
 	//TODO: private or public? 
@@ -28,4 +29,8 @@ public:
 	UFUNCTION()
 	virtual void OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus);
 	TArray<TObjectPtr<AActor>> SearchedHouses;
+
+	// hack fix for player getting hit by an enemy up their butt but not sensing it
+	int LastHealth = -1;
+	float LastDamageReactionTime = -1000.f;
 };
