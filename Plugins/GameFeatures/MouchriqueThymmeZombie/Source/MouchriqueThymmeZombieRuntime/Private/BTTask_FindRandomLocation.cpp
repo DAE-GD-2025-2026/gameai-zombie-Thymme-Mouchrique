@@ -35,36 +35,57 @@ EBTNodeResult::Type UBTTask_FindRandomLocation::ExecuteTask(UBehaviorTreeCompone
 		return EBTNodeResult::Failed;
 	}
 
+	const FVector PawnLocation = Pawn->GetActorLocation();
+	const FVector LastExploreLocation = Blackboard->GetValueAsVector(TEXT("LastExploreLocation"));
+
 	constexpr float ExploreRadius = 900.f;
-	constexpr float MinMoveDistance = 450.f;
+	constexpr float MinDistanceFromPawn = 450.f;
+	constexpr float MinDistanceFromLastExplore = 600.f;
+	constexpr int MaxAttempts = 10;
 
 	FNavLocation NavLocation;
-	bool bFound = false;
+	bool bFoundGoodLocation = false;
 
-	for (int Attempt = 0; Attempt < 8; ++Attempt)
+	for (int Attempt = 0; Attempt < MaxAttempts; ++Attempt)
 	{
-		if (!NavSystem->GetRandomReachablePointInRadius(Pawn->GetActorLocation(), ExploreRadius, NavLocation))
+		const bool bFound = NavSystem->GetRandomReachablePointInRadius(
+			PawnLocation,
+			ExploreRadius,
+			NavLocation
+		);
+
+		if (!bFound)
 		{
 			continue;
 		}
 
-		const float Distance = FVector::Dist2D(Pawn->GetActorLocation(), NavLocation.Location);
+		const float DistanceFromPawn = FVector::Dist2D(PawnLocation, NavLocation.Location);
+		const float DistanceFromLastExplore = FVector::Dist2D(LastExploreLocation, NavLocation.Location);
 
-		if (Distance >= MinMoveDistance)
+		if (DistanceFromPawn < MinDistanceFromPawn)
 		{
-			bFound = true;
-			break;
+			continue;
 		}
+
+		if (!LastExploreLocation.IsNearlyZero() && DistanceFromLastExplore < MinDistanceFromLastExplore)
+		{
+			continue;
+		}
+
+		bFoundGoodLocation = true;
+		break;
 	}
 
-	if (!bFound)
+	if (!bFoundGoodLocation)
 	{
 		return EBTNodeResult::Failed;
 	}
 
 	Blackboard->SetValueAsVector(TEXT("MoveLocation"), NavLocation.Location);
+	Blackboard->SetValueAsVector(TEXT("LastExploreLocation"), NavLocation.Location);
 
-	DrawDebugSphere(Pawn->GetWorld(), NavLocation.Location, 80.f, 12, FColor::Blue, false, 2.f);
+	DrawDebugSphere(Pawn->GetWorld(), NavLocation.Location, 80.f, 12, FColor::Blue, false, 1.f);
+	DrawDebugLine(Pawn->GetWorld(), PawnLocation, NavLocation.Location, FColor::Blue, false, 1.f, 0, 3.f);
 
 	return EBTNodeResult::Succeeded;
 }
