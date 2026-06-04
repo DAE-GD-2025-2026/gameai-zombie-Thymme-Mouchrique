@@ -354,15 +354,40 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 
 	if (bIsZombie)
 	{
+		// read new enemy from perception but only update blackboard if new enemy is closer than current one
 		if (Stimulus.WasSuccessfullySensed())
 		{
-			UE_LOG(LogTemp, Warning, TEXT("SETTING TargetEnemy: %s"), *Actor->GetName());
-			Blackboard->SetValueAsObject(TEXT("TargetEnemy"), Actor);
+			AActor* CurrentEnemy = Cast<AActor>(Blackboard->GetValueAsObject(TEXT("TargetEnemy")));
+
+			if (!CurrentEnemy)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("SETTING TargetEnemy: %s"), *Actor->GetName());
+				Blackboard->SetValueAsObject(TEXT("TargetEnemy"), Actor);
+				return;
+			}
+
+			const float NewEnemyDistance = FVector::Dist2D(
+				OwnerPawn->GetActorLocation(),
+				Actor->GetActorLocation()
+			);
+
+			const float CurrentEnemyDistance = FVector::Dist2D(
+				OwnerPawn->GetActorLocation(),
+				CurrentEnemy->GetActorLocation()
+			);
+
+			if (NewEnemyDistance < CurrentEnemyDistance)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("SWITCHING TargetEnemy to closer enemy: %s"), *Actor->GetName());
+				Blackboard->SetValueAsObject(TEXT("TargetEnemy"), Actor);
+			}
+			else
+			{
+				UE_LOG(LogTemp, Warning, TEXT("KEEPING current TargetEnemy: %s"), *CurrentEnemy->GetName());
+			}
 		}
 		else
 		{
-			// don't clear TargetEnemy immediately or it will flicker
-			//TODO: fix
 			UE_LOG(LogTemp, Warning, TEXT("LOST TargetEnemy, keeping memory"));
 		}
 
