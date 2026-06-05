@@ -39,18 +39,30 @@ EBTNodeResult::Type UBTTask_FindRandomLocation::ExecuteTask(UBehaviorTreeCompone
 			return EBTNodeResult::Failed;
 		}
 
-		FVector VillageExploreLocation;
-		if (StudentPerceptor->GetVillageExploreLocation(VillageExploreLocation))
+		const int VillageExploreCount = Blackboard->GetValueAsInt(TEXT("VillageExploreCount"));
+		constexpr int MaxVillageExploreCount = 8;
+
+		// max village count to prevent player endlessly searching 
+		if (VillageExploreCount < MaxVillageExploreCount)
 		{
-			Blackboard->SetValueAsVector(TEXT("MoveLocation"), VillageExploreLocation);
-			Blackboard->SetValueAsVector(TEXT("LastExploreLocation"), VillageExploreLocation);
+			FVector VillageExploreLocation;
 
-			UE_LOG(LogTemp, Warning, TEXT("[Explore] Exploring around last known village."));
+			if (StudentPerceptor->GetVillageCircleExploreLocation(VillageExploreLocation))
+			{
+				Blackboard->SetValueAsVector(TEXT("MoveLocation"), VillageExploreLocation);
+				Blackboard->SetValueAsVector(TEXT("LastExploreLocation"), VillageExploreLocation);
 
-			DrawDebugSphere(Pawn->GetWorld(), VillageExploreLocation, 80.f, 12, FColor::Green, false, 1.f);
-			DrawDebugLine(Pawn->GetWorld(), Pawn->GetActorLocation(), VillageExploreLocation, FColor::Green, false, 1.f, 0, 3.f);
+				UE_LOG(LogTemp, Warning, TEXT("[Explore] Circle exploring around last known village."));
 
-			return EBTNodeResult::Succeeded;
+				DrawDebugSphere(Pawn->GetWorld(), VillageExploreLocation, 80.f, 12, FColor::Green, false, 1.f);
+				DrawDebugLine(Pawn->GetWorld(), Pawn->GetActorLocation(), VillageExploreLocation, FColor::Green, false, 1.f, 0, 3.f);
+
+				return EBTNodeResult::Succeeded;
+			}
+		}
+		else
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[Explore] Village fully checked. Searching new area."));
 		}
 	}
 

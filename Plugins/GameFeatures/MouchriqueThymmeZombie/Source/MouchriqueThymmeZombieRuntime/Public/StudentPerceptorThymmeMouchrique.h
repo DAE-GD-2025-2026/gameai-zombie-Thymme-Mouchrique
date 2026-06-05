@@ -32,6 +32,9 @@ public:
 
 	bool TryUpdateTargetHouse();
 	bool GetVillageExploreLocation(FVector& OutLocation) const;
+	bool GetVillageCircleExploreLocation(FVector& OutLocation);
+	void ResetVillageExploreIndex();
+
 private:
 	UPROPERTY()
 	TArray<TObjectPtr<AActor>> KnownHouses;
@@ -49,4 +52,5 @@ private:
 	// village 
 	FVector LastVillageLocation = FVector::ZeroVector;
 	bool bHasLastVillageLocation = false;
+	int VillageExploreIndex = 0;
 };

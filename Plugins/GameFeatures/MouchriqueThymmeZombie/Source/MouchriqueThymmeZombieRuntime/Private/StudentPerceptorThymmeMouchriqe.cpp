@@ -456,7 +456,7 @@ void UStudentPerceptor::MarkHouseSearched(AActor* House)
 
 	LastVillageLocation = House->GetActorLocation();
 	bHasLastVillageLocation = true;
-
+	ResetVillageExploreIndex();
 	APawn* OwnerPawn = Cast<APawn>(GetOwner());
 
 	if (!OwnerPawn)
@@ -567,7 +567,83 @@ bool UStudentPerceptor::GetVillageExploreLocation(FVector& OutLocation) const
 	OutLocation = NavLocation.Location;
 	return true;
 }
+bool UStudentPerceptor::GetVillageCircleExploreLocation(FVector& OutLocation)
+{
+	if (!bHasLastVillageLocation)
+	{
+		return false;
+	}
 
+	constexpr int MaxVillageExplorePoints = 8;
+
+	if (VillageExploreIndex >= MaxVillageExplorePoints)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[VillageExplore] Finished circle sweep."));
+		return false;
+	}
+
+	UWorld* World = GetWorld();
+
+	if (!World)
+	{
+		return false;
+	}
+
+	UNavigationSystemV1* NavSystem = UNavigationSystemV1::GetCurrent(World);
+
+	if (!NavSystem)
+	{
+		return false;
+	}
+
+	// TODO: check radius 
+	constexpr float CircleRadius = 1400.f;
+	constexpr float ProjectionExtent = 600.f;
+
+	const float AngleStep = 360.f / static_cast<float>(MaxVillageExplorePoints);
+	const float AngleDegrees = AngleStep * static_cast<float>(VillageExploreIndex);
+	const float AngleRadians = FMath::DegreesToRadians(AngleDegrees);
+
+	const FVector Offset(
+		FMath::Cos(AngleRadians) * CircleRadius,
+		FMath::Sin(AngleRadians) * CircleRadius,
+		0.f
+	);
+
+	const FVector DesiredLocation = LastVillageLocation + Offset;
+
+	FNavLocation ProjectedLocation;
+
+	const bool bProjected = NavSystem->ProjectPointToNavigation(
+		DesiredLocation,
+		ProjectedLocation,
+		FVector(ProjectionExtent, ProjectionExtent, ProjectionExtent)
+	);
+
+	if (!bProjected)
+	{
+		++VillageExploreIndex;
+		return false;
+	}
+
+	OutLocation = ProjectedLocation.Location;
+
+	UE_LOG(
+		LogTemp,
+		Warning,
+		TEXT("[VillageExplore] Circle point %d/%d"),
+		VillageExploreIndex + 1,
+		MaxVillageExplorePoints
+	);
+
+	++VillageExploreIndex;
+	return true;
+}
+
+void UStudentPerceptor::ResetVillageExploreIndex()
+{
+	VillageExploreIndex = 0;
+}
 void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 {
 	if (!Actor)
@@ -707,6 +783,7 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 			if (!KnownHouses.Contains(Actor) && !SearchedHouses.Contains(Actor))
 			{
 				KnownHouses.Add(Actor);
+				ResetVillageExploreIndex();
 				UE_LOG(LogTemp, Warning, TEXT("Added known house: %s"), *Actor->GetName());
 			}
 
