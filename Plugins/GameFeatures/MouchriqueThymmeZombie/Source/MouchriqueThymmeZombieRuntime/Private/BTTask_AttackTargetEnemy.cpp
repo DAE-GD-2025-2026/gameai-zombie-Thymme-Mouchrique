@@ -145,7 +145,15 @@ EBTNodeResult::Type UBTTask_AttackTargetEnemy::ExecuteTask(UBehaviorTreeComponen
 
 	if (!HasAnyUsableWeapon(Items))
 	{
+
+		// fix for firing but not having ammo left to fire again (led to player being stuck)
+
 		Blackboard->SetValueAsBool(TEXT("HasWeapon"), false);
+		Blackboard->SetValueAsBool(TEXT("ShouldAttackEnemy"), false);
+		Blackboard->SetValueAsBool(TEXT("ShouldFleeEnemy"), true);
+
+		UE_LOG(LogTemp, Warning, TEXT("No usable weapon left. Switching to flee enemy."));
+
 		return EBTNodeResult::Failed;
 	}
 
