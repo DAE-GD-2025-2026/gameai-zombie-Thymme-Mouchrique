@@ -1,6 +1,4 @@
-﻿// Fill out your copyright notice in the Description page of Project Settings.
-
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
@@ -10,7 +8,7 @@
 #include "Perception/AISense_Damage.h"
 #include "StudentPerceptorThymmeMouchrique.generated.h"
 
-UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
+UCLASS(ClassGroup = (Custom), meta = (BlueprintSpawnableComponent))
 class MOUCHRIQUETHYMMEZOMBIERUNTIME_API UStudentPerceptor : public UActorComponent
 {
 	GENERATED_BODY()
@@ -18,9 +16,9 @@ class MOUCHRIQUETHYMMEZOMBIERUNTIME_API UStudentPerceptor : public UActorCompone
 public:
 	// Sets default values for this component's properties
 	UStudentPerceptor();
-	
+
 	virtual void BeginPlay() override;
-	virtual void TickComponent(float DeltaTime,ELevelTick TickType,FActorComponentTickFunction* ThisTickFunction) override;
+	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 	// keep track of searched and unsearched houses in the area
 	//TODO: private or public? 
@@ -35,6 +33,18 @@ public:
 	bool GetVillageCircleExploreLocation(FVector& OutLocation);
 	void ResetVillageExploreIndex();
 
+	// check if enemy is actually visible right now and not just remembered
+	bool IsEnemyCurrentlyVisible(const AActor* Enemy) const;
+
+	// get last position where perception actually saw the enemy
+	bool GetLastKnownEnemyLocation(const AActor* Enemy, FVector& OutLocation) const;
+
+	// get all enemies that are actually visible right now for flee separation
+	void GetVisibleEnemyLocations(TArray<FVector>& OutLocations) const;
+
+	// purge task uses remembered position instead of reading hidden actor position
+	bool GetLastKnownPurgeLocation(FVector& OutLocation) const;
+
 private:
 	UPROPERTY()
 	TArray<TObjectPtr<AActor>> KnownHouses;
@@ -45,6 +55,19 @@ private:
 	// hack fix for player getting hit by an enemy up their butt but not sensing it
 	int LastHealth = -1;
 	float LastDamageReactionTime = -1000.f;
+
+	// update own health stamina and weapon state without needing a perception event
+	float SelfStateAccumulator = 0.f;
+
+	// remember where enemies were actually seen instead of tracking them through walls
+	TMap<TWeakObjectPtr<AActor>, FVector> LastKnownEnemyLocations;
+	TMap<TWeakObjectPtr<AActor>, float> LastEnemySeenTimes;
+	TSet<TWeakObjectPtr<AActor>> VisibleEnemies;
+
+	// remember purge location for a bit after losing sight so player does not instantly forget danger
+	FVector LastKnownPurgeLocation = FVector::ZeroVector;
+	float LastPurgeSeenTime = -1000.f;
+	bool bHasKnownPurgeLocation = false;
 
 	bool bDidInitialScan = false;
 	float InitialScanTimer = 0.f;

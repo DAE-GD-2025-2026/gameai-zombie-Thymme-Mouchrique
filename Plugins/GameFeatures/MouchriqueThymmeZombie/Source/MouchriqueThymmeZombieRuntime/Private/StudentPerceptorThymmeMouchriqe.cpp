@@ -1,4 +1,5 @@
 ﻿#include "StudentPerceptorThymmeMouchrique.h"
+#include "SurvivorAIShared.h"
 
 #include "NavigationSystem.h"
 
@@ -21,11 +22,6 @@ namespace
 	bool IsZombieActor(const AActor* Actor)
 	{
 		return Actor && Cast<ABaseZombie>(Actor) != nullptr;
-	}
-
-	bool IsRunnerZombieActor(const AActor* Actor)
-	{
-		return Actor && Actor->GetName().Contains(TEXT("Runner"));
 	}
 
 	bool IsHouseActor(const AActor* Actor)
@@ -60,12 +56,6 @@ namespace
 		}
 	}
 
-	bool IsWeaponItemType(EItemType ItemType)
-	{
-		return ItemType == EItemType::Pistol ||
-			ItemType == EItemType::Shotgun;
-	}
-
 	bool InventoryHasItemOfType(const UInventoryComponent* Inventory, EItemType WantedItemType)
 	{
 		if (!Inventory)
@@ -86,60 +76,54 @@ namespace
 		return false;
 	}
 
-	bool InventoryHasWeapon(const UInventoryComponent* Inventory)
-	{
-		if (!Inventory)
-		{
-			return false;
-		}
-
-		return InventoryHasItemOfType(Inventory, EItemType::Pistol) ||
-			InventoryHasItemOfType(Inventory, EItemType::Shotgun);
-	}
-
-	void SetBasicEnemyDecisionBlackboard(UBlackboardComponent* Blackboard, const UInventoryComponent* Inventory)
+	// one place decides if player should attack or flee so decisions do not overwrite each other
+	void UpdateCombatDecision(
+		UBlackboardComponent* Blackboard,
+		const EKnownZombieType EnemyType,
+		const float EnemyDistance,
+		const UInventoryComponent* Inventory)
 	{
 		if (!Blackboard)
 		{
 			return;
 		}
 
-		const bool bHasWeapon = InventoryHasWeapon(Inventory);
-		const bool bLowHealth = Blackboard->GetValueAsBool(TEXT("IsLowHealth"));
-
-		Blackboard->SetValueAsBool(TEXT("ShouldAttackEnemy"), bHasWeapon);
-		Blackboard->SetValueAsBool(TEXT("ShouldFleeEnemy"), !bHasWeapon || bLowHealth);
-	}
-
-	void UpdateEnemyDecisionBlackboard(
-		UBlackboardComponent* Blackboard,
-		APawn* OwnerPawn,
-		const AActor* Enemy,
-		const UInventoryComponent* Inventory)
-	{
-		if (!Blackboard || !OwnerPawn || !Enemy)
-		{
-			return;
-		}
-
-		const bool bIsRunner = IsRunnerZombieActor(Enemy);
-		const bool bHasWeapon = InventoryHasWeapon(Inventory);
-		const bool bLowHealth = Blackboard->GetValueAsBool(TEXT("IsLowHealth"));
-		const bool bHasTargetHouse = Blackboard->GetValueAsObject(TEXT("TargetHouse")) != nullptr;
+		const bool bHasWeapon = InventoryHasUsableWeapon(Inventory);
+		const int Ammo = GetTotalUsableAmmo(Inventory);
+		const bool bLowHealth = Blackboard->GetValueAsBool(SurvivorBB::IsLowHealth);
+		const bool bHasTargetHouse = Blackboard->GetValueAsObject(SurvivorBB::TargetHouse) != nullptr;
 
 		bool bShouldFleeToHouse = false;
 		bool bShouldAttackEnemy = false;
 		bool bShouldFleeEnemy = false;
 
+		const bool bIsRunner = EnemyType == EKnownZombieType::Runner;
+		const bool bIsHeavy = EnemyType == EKnownZombieType::Heavy;
+
 		if (bIsRunner)
 		{
 			// Runner is faster than the player
 			// Best answer: hide in a house if we know one
-			if (bHasTargetHouse)
+			if (!bHasWeapon || bLowHealth)
 			{
-				bShouldFleeToHouse = true;
+				if (bHasTargetHouse)
+				{
+					bShouldFleeToHouse = true;
+				}
+				else
+				{
+					bShouldFleeEnemy = true;
+				}
 			}
-			else if (bHasWeapon)
+			else
+			{
+				bShouldAttackEnemy = true;
+			}
+		}
+		else if (bIsHeavy)
+		{
+			// heavy is slow but takes a lot of ammo so only fight if close and we have enough
+			if (bHasWeapon && !bLowHealth && EnemyDistance < 500.f && Ammo >= 5)
 			{
 				bShouldAttackEnemy = true;
 			}
@@ -151,7 +135,7 @@ namespace
 		else
 		{
 			// Normal/heavy zombies are less urgent
-			if (bHasWeapon && !bLowHealth)
+			if (bHasWeapon && !bLowHealth && (Ammo >= 2 || EnemyDistance < 450.f))
 			{
 				bShouldAttackEnemy = true;
 			}
@@ -161,10 +145,10 @@ namespace
 			}
 		}
 
-		Blackboard->SetValueAsBool(TEXT("IsRunnerEnemy"), bIsRunner);
-		Blackboard->SetValueAsBool(TEXT("ShouldFleeToHouse"), bShouldFleeToHouse);
-		Blackboard->SetValueAsBool(TEXT("ShouldAttackEnemy"), bShouldAttackEnemy);
-		Blackboard->SetValueAsBool(TEXT("ShouldFleeEnemy"), bShouldFleeEnemy);
+		Blackboard->SetValueAsBool(SurvivorBB::IsRunnerEnemy, bIsRunner);
+		Blackboard->SetValueAsBool(SurvivorBB::ShouldFleeToHouse, bShouldFleeToHouse);
+		Blackboard->SetValueAsBool(SurvivorBB::ShouldAttackEnemy, bShouldAttackEnemy);
+		Blackboard->SetValueAsBool(SurvivorBB::ShouldFleeEnemy, bShouldFleeEnemy);
 
 		UE_LOG(
 			LogTemp,
@@ -197,26 +181,6 @@ namespace
 		return false;
 	}
 
-	int GetFreeSlotCount(const UInventoryComponent* Inventory)
-	{
-		if (!Inventory)
-		{
-			return 0;
-		}
-
-		int FreeSlots = 0;
-
-		for (const ABaseItem* Item : Inventory->GetInventory())
-		{
-			if (!Item)
-			{
-				++FreeSlots;
-			}
-		}
-
-		return FreeSlots;
-	}
-
 	int GetItemPriority(const AActor* ItemActor, const UBlackboardComponent* Blackboard, const UInventoryComponent* Inventory)
 	{
 		if (!ItemActor || !Blackboard || !Inventory)
@@ -233,23 +197,40 @@ namespace
 
 		const EItemType ItemType = Item->GetItemType();
 
-		const bool bLowHealth = Blackboard->GetValueAsBool(TEXT("IsLowHealth"));
-		const bool bLowEnergy = Blackboard->GetValueAsBool(TEXT("IsLowEnergy"));
+		const bool bLowHealth = Blackboard->GetValueAsBool(SurvivorBB::IsLowHealth);
+		const bool bLowEnergy = Blackboard->GetValueAsBool(SurvivorBB::IsLowEnergy);
 
 		const bool bHasPistol = InventoryHasItemOfType(Inventory, EItemType::Pistol);
 		const bool bHasShotgun = InventoryHasItemOfType(Inventory, EItemType::Shotgun);
 		const bool bHasMedkit = InventoryHasItemOfType(Inventory, EItemType::Medkit);
 		const bool bHasFood = InventoryHasItemOfType(Inventory, EItemType::Food);
 
+		const bool bHasUsableWeapon = InventoryHasUsableWeapon(Inventory);
+
 		// "basic kit" just means having at least one of each type of item
 		const bool bHasBasicKit = bHasPistol && bHasShotgun && bHasMedkit && bHasFood;
 
-		const int FreeSlots = GetFreeSlotCount(Inventory);
 		const bool bItemIsDuplicate =
 			(ItemType == EItemType::Pistol && bHasPistol) ||
 			(ItemType == EItemType::Shotgun && bHasShotgun) ||
 			(ItemType == EItemType::Medkit && bHasMedkit) ||
 			(ItemType == EItemType::Food && bHasFood);
+
+		// critical stuff should come before trying to complete the basic kit
+		if (ItemType == EItemType::Medkit && bLowHealth)
+		{
+			return 200;
+		}
+
+		if (ItemType == EItemType::Food && bLowEnergy)
+		{
+			return 180;
+		}
+
+		if (IsWeaponItemType(ItemType) && !bHasUsableWeapon && Item->GetValue() > 0)
+		{
+			return 160;
+		}
 
 		// prevent player gathering duplicate objects if it does not have 1 of each first
 		if (!bHasBasicKit && bItemIsDuplicate)
@@ -283,7 +264,7 @@ namespace
 				return 90;
 			}
 
-			return bLowHealth ? 70 : 0;
+			return 10;
 		}
 
 		if (ItemType == EItemType::Food)
@@ -293,13 +274,17 @@ namespace
 				return 80;
 			}
 
-			return bLowEnergy ? 60 : 0;
+			return 10;
 		}
 
 		return 0;
 	}
 
-	float GetItemScore(const AActor* ItemActor, const UBlackboardComponent* Blackboard, const UInventoryComponent* Inventory, const FVector& FromLocation)
+	float GetItemScore(
+		const AActor* ItemActor,
+		const UBlackboardComponent* Blackboard,
+		const UInventoryComponent* Inventory,
+		const FVector& FromLocation)
 	{
 		if (!ItemActor)
 		{
@@ -321,8 +306,34 @@ namespace
 		const float Distance = FVector::Dist2D(FromLocation, ItemActor->GetActorLocation());
 		const float DistancePenalty = Distance / 100.f;
 
+		const ABaseItem* Item = Cast<ABaseItem>(ItemActor);
+		float ValueBonus = 0.f;
+
+		if (Item)
+		{
+			// use item value too because it contains ammo healing or stamina amount
+			switch (Item->GetItemType())
+			{
+			case EItemType::Pistol:
+			case EItemType::Shotgun:
+				ValueBonus = Item->GetValue() * 3.f;
+				break;
+
+			case EItemType::Medkit:
+				ValueBonus = Item->GetValue() * 4.f;
+				break;
+
+			case EItemType::Food:
+				ValueBonus = Item->GetValue() * 2.f;
+				break;
+
+			default:
+				break;
+			}
+		}
+
 		// final score, higher score = better target
-		return Priority - DistancePenalty;
+		return Priority + ValueBonus - DistancePenalty;
 	}
 }
 
@@ -364,6 +375,90 @@ void UStudentPerceptor::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 		return;
 	}
 
+	AAIController* AIController = Cast<AAIController>(OwnerPawn->GetController());
+	UBlackboardComponent* Blackboard = AIController ? AIController->GetBlackboardComponent() : nullptr;
+
+	const float CurrentTime = GetWorld()->GetTimeSeconds();
+
+	// forget purge after a few seconds instead of tracking actor forever
+	if (bHasKnownPurgeLocation && CurrentTime - LastPurgeSeenTime > 4.f)
+	{
+		bHasKnownPurgeLocation = false;
+
+		if (Blackboard)
+		{
+			Blackboard->ClearValue(SurvivorBB::TargetPurgeZone);
+		}
+	}
+
+	// forget enemy after a few seconds if it is not visible anymore
+	if (Blackboard)
+	{
+		AActor* TargetEnemy = Cast<AActor>(Blackboard->GetValueAsObject(SurvivorBB::TargetEnemy));
+
+		if (TargetEnemy && !IsEnemyCurrentlyVisible(TargetEnemy))
+		{
+			const TWeakObjectPtr<AActor> EnemyKey(TargetEnemy);
+			const float* LastSeenTime = LastEnemySeenTimes.Find(EnemyKey);
+
+			if (LastSeenTime && CurrentTime - *LastSeenTime > 4.f)
+			{
+				Blackboard->ClearValue(SurvivorBB::TargetEnemy);
+				Blackboard->SetValueAsBool(SurvivorBB::ShouldAttackEnemy, false);
+				Blackboard->SetValueAsBool(SurvivorBB::ShouldFleeEnemy, false);
+				Blackboard->SetValueAsBool(SurvivorBB::ShouldFleeToHouse, false);
+
+				LastKnownEnemyLocations.Remove(EnemyKey);
+				LastEnemySeenTimes.Remove(EnemyKey);
+				VisibleEnemies.Remove(EnemyKey);
+			}
+		}
+	}
+
+	// update own stuff every little bit even if perception does not fire
+	SelfStateAccumulator += DeltaTime;
+
+	if (SelfStateAccumulator >= 0.35f)
+	{
+		SelfStateAccumulator = 0.f;
+
+		UHealthComponent* SelfHealth = OwnerPawn->FindComponentByClass<UHealthComponent>();
+		UStaminaComponent* Stamina = OwnerPawn->FindComponentByClass<UStaminaComponent>();
+		UInventoryComponent* Inventory = OwnerPawn->FindComponentByClass<UInventoryComponent>();
+
+		if (Blackboard)
+		{
+			if (SelfHealth && SelfHealth->GetMaxHealth() > 0)
+			{
+				const float HealthRatio =
+					static_cast<float>(SelfHealth->GetHealth()) /
+					static_cast<float>(SelfHealth->GetMaxHealth());
+
+				Blackboard->SetValueAsBool(
+					SurvivorBB::IsLowHealth,
+					HealthRatio <= 0.35f
+				);
+			}
+
+			if (Stamina && Stamina->GetMaxStamina() > 0.f)
+			{
+				const float StaminaRatio =
+					Stamina->GetCurrentStamina() /
+					Stamina->GetMaxStamina();
+
+				Blackboard->SetValueAsBool(
+					SurvivorBB::IsLowEnergy,
+					StaminaRatio <= 0.30f
+				);
+			}
+
+			Blackboard->SetValueAsBool(
+				SurvivorBB::HasWeapon,
+				InventoryHasUsableWeapon(Inventory)
+			);
+		}
+	}
+
 	UHealthComponent* Health = OwnerPawn->FindComponentByClass<UHealthComponent>();
 
 	if (!Health)
@@ -389,9 +484,6 @@ void UStudentPerceptor::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 			bDidInitialScan = true;
 			UE_LOG(LogTemp, Warning, TEXT("[STUDENTPERCEPTOR] Finished initial spawn scan."));
 
-			AAIController* AIController = Cast<AAIController>(OwnerPawn->GetController());
-			UBlackboardComponent* Blackboard = AIController ? AIController->GetBlackboardComponent() : nullptr;
-
 			if (Blackboard)
 			{
 				Blackboard->SetValueAsBool(TEXT("HasFinishedInitialScan"), true);
@@ -408,18 +500,15 @@ void UStudentPerceptor::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 	if (LastHealth < 0)
 	{
 		LastHealth = CurrentHealth;
-		return;
 	}
 
 	const bool bTookDamage = CurrentHealth < LastHealth;
-	const float CurrentTime = GetWorld()->GetTimeSeconds();
 
 	if (bTookDamage && CurrentTime - LastDamageReactionTime > 0.75f)
 	{
-		AAIController* AIController = Cast<AAIController>(OwnerPawn->GetController());
-		UBlackboardComponent* Blackboard = AIController ? AIController->GetBlackboardComponent() : nullptr;
-
-		const bool bAlreadyHasEnemy = Blackboard && Blackboard->GetValueAsObject(TEXT("TargetEnemy")) != nullptr;
+		const bool bAlreadyHasEnemy =
+			Blackboard &&
+			Blackboard->GetValueAsObject(SurvivorBB::TargetEnemy) != nullptr;
 
 		if (!bAlreadyHasEnemy)
 		{
@@ -567,6 +656,7 @@ bool UStudentPerceptor::GetVillageExploreLocation(FVector& OutLocation) const
 	OutLocation = NavLocation.Location;
 	return true;
 }
+
 bool UStudentPerceptor::GetVillageCircleExploreLocation(FVector& OutLocation)
 {
 	if (!bHasLastVillageLocation)
@@ -644,6 +734,68 @@ void UStudentPerceptor::ResetVillageExploreIndex()
 {
 	VillageExploreIndex = 0;
 }
+
+bool UStudentPerceptor::IsEnemyCurrentlyVisible(const AActor* Enemy) const
+{
+	if (!Enemy)
+	{
+		return false;
+	}
+
+	return VisibleEnemies.Contains(TWeakObjectPtr<AActor>(const_cast<AActor*>(Enemy)));
+}
+
+bool UStudentPerceptor::GetLastKnownEnemyLocation(const AActor* Enemy, FVector& OutLocation) const
+{
+	if (!Enemy)
+	{
+		return false;
+	}
+
+	const TWeakObjectPtr<AActor> EnemyKey(const_cast<AActor*>(Enemy));
+
+	const FVector* KnownLocation = LastKnownEnemyLocations.Find(EnemyKey);
+
+	if (!KnownLocation)
+	{
+		return false;
+	}
+
+	OutLocation = *KnownLocation;
+	return true;
+}
+
+void UStudentPerceptor::GetVisibleEnemyLocations(TArray<FVector>& OutLocations) const
+{
+	OutLocations.Reset();
+
+	for (const TWeakObjectPtr<AActor>& Enemy : VisibleEnemies)
+	{
+		if (!Enemy.IsValid())
+		{
+			continue;
+		}
+
+		const FVector* KnownLocation = LastKnownEnemyLocations.Find(Enemy);
+
+		if (KnownLocation)
+		{
+			OutLocations.Add(*KnownLocation);
+		}
+	}
+}
+
+bool UStudentPerceptor::GetLastKnownPurgeLocation(FVector& OutLocation) const
+{
+	if (!bHasKnownPurgeLocation)
+	{
+		return false;
+	}
+
+	OutLocation = LastKnownPurgeLocation;
+	return true;
+}
+
 void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 {
 	if (!Actor)
@@ -679,19 +831,36 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 	UStaminaComponent* Stamina = OwnerPawn->FindComponentByClass<UStaminaComponent>();
 	UInventoryComponent* Inventory = OwnerPawn->FindComponentByClass<UInventoryComponent>();
 
-	if (Health)
+	if (Health && Health->GetMaxHealth() > 0)
 	{
-		Blackboard->SetValueAsBool(TEXT("IsLowHealth"), Health->GetHealth() <= 5);
+		const float HealthRatio =
+			static_cast<float>(Health->GetHealth()) /
+			static_cast<float>(Health->GetMaxHealth());
+
+		Blackboard->SetValueAsBool(
+			SurvivorBB::IsLowHealth,
+			HealthRatio <= 0.35f
+		);
 	}
 
-	if (Stamina)
+	if (Stamina && Stamina->GetMaxStamina() > 0.f)
 	{
-		Blackboard->SetValueAsBool(TEXT("IsLowEnergy"), Stamina->GetCurrentStamina() <= 3.f);
+		const float StaminaRatio =
+			Stamina->GetCurrentStamina() /
+			Stamina->GetMaxStamina();
+
+		Blackboard->SetValueAsBool(
+			SurvivorBB::IsLowEnergy,
+			StaminaRatio <= 0.30f
+		);
 	}
 
 	if (Inventory)
 	{
-		Blackboard->SetValueAsBool(TEXT("HasWeapon"), InventoryHasWeapon(Inventory));
+		Blackboard->SetValueAsBool(
+			SurvivorBB::HasWeapon,
+			InventoryHasUsableWeapon(Inventory)
+		);
 	}
 
 	const bool bIsPurgeZone = IsPurgeZoneActor(Actor);
@@ -699,20 +868,24 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 	const bool bIsHouse = IsHouseActor(Actor);
 	const bool bIsUsefulItem = IsUsefulItemActor(Actor);
 
+	const float CurrentTime = GetWorld()->GetTimeSeconds();
+
 	if (bIsPurgeZone)
 	{
 		if (Stimulus.WasSuccessfullySensed())
 		{
+			// remember where perception actually saw purge instead of reading actor through walls
+			LastKnownPurgeLocation = Stimulus.StimulusLocation;
+			LastPurgeSeenTime = CurrentTime;
+			bHasKnownPurgeLocation = true;
+
 			UE_LOG(LogTemp, Warning, TEXT("SETTING TargetPurgeZone: %s"), *Actor->GetName());
-			Blackboard->SetValueAsObject(TEXT("TargetPurgeZone"), Actor);
+			Blackboard->SetValueAsObject(SurvivorBB::TargetPurgeZone, Actor);
 		}
 		else
 		{
-			if (Blackboard->GetValueAsObject(TEXT("TargetPurgeZone")) == Actor)
-			{
-				UE_LOG(LogTemp, Warning, TEXT("CLEARING TargetPurgeZone: %s"), *Actor->GetName());
-				Blackboard->ClearValue(TEXT("TargetPurgeZone"));
-			}
+			// keep purge memory for a few seconds because losing sight does not mean we are safe
+			UE_LOG(LogTemp, Warning, TEXT("LOST TargetPurgeZone, keeping memory: %s"), *Actor->GetName());
 		}
 
 		return;
@@ -720,54 +893,95 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 
 	if (bIsZombie)
 	{
+		const TWeakObjectPtr<AActor> EnemyKey(Actor);
+
 		// read new enemy from perception but only update blackboard if new enemy is closer than current one
 		if (Stimulus.WasSuccessfullySensed())
 		{
+			// remember only what perception actually told us about this enemy
+			LastKnownEnemyLocations.Add(EnemyKey, Stimulus.StimulusLocation);
+			LastEnemySeenTimes.Add(EnemyKey, CurrentTime);
+			VisibleEnemies.Add(EnemyKey);
+
 			// before deciding what to do with a runner, try to make sure we have a known house target
 			// if no known house exists, this does nothing
 			TryUpdateTargetHouse();
 
-			AActor* CurrentEnemy = Cast<AActor>(Blackboard->GetValueAsObject(TEXT("TargetEnemy")));
+			AActor* CurrentEnemy = Cast<AActor>(Blackboard->GetValueAsObject(SurvivorBB::TargetEnemy));
 
 			if (!CurrentEnemy)
 			{
 				UE_LOG(LogTemp, Warning, TEXT("SETTING TargetEnemy: %s"), *Actor->GetName());
-				Blackboard->SetValueAsObject(TEXT("TargetEnemy"), Actor);
+				Blackboard->SetValueAsObject(SurvivorBB::TargetEnemy, Actor);
 
-				SetBasicEnemyDecisionBlackboard(Blackboard, Inventory);
-				UpdateEnemyDecisionBlackboard(Blackboard, OwnerPawn, Actor, Inventory);
+				const float EnemyDistance = FVector::Dist2D(
+					OwnerPawn->GetActorLocation(),
+					Stimulus.StimulusLocation
+				);
+
+				UpdateCombatDecision(
+					Blackboard,
+					ClassifyZombie(Actor),
+					EnemyDistance,
+					Inventory
+				);
+
 				return;
 			}
 
-			const float NewEnemyDistance = FVector::Dist2D(
-				OwnerPawn->GetActorLocation(),
-				Actor->GetActorLocation()
-			);
+			FVector CurrentEnemyLocation = FVector::ZeroVector;
 
-			const float CurrentEnemyDistance = FVector::Dist2D(
-				OwnerPawn->GetActorLocation(),
-				CurrentEnemy->GetActorLocation()
-			);
+			const bool bHasCurrentEnemyLocation = GetLastKnownEnemyLocation(CurrentEnemy, CurrentEnemyLocation);
 
-			if (NewEnemyDistance < CurrentEnemyDistance)
+			const bool bCurrentEnemyVisible = IsEnemyCurrentlyVisible(CurrentEnemy);
+
+			const float NewEnemyDistance = FVector::Dist2D(OwnerPawn->GetActorLocation(), Stimulus.StimulusLocation);
+
+			const float CurrentEnemyDistance = bHasCurrentEnemyLocation ? FVector::Dist2D(OwnerPawn->GetActorLocation(),
+					CurrentEnemyLocation)
+				: TNumericLimits<float>::Max();
+
+			// visible enemy should replace an old invisible target instead of comparing against stale distance
+			if (!bCurrentEnemyVisible || NewEnemyDistance < CurrentEnemyDistance)
 			{
 				UE_LOG(LogTemp, Warning, TEXT("SWITCHING TargetEnemy to closer enemy: %s"), *Actor->GetName());
-				Blackboard->SetValueAsObject(TEXT("TargetEnemy"), Actor);
+				Blackboard->SetValueAsObject(SurvivorBB::TargetEnemy, Actor);
 
-				SetBasicEnemyDecisionBlackboard(Blackboard, Inventory);
-				UpdateEnemyDecisionBlackboard(Blackboard, OwnerPawn, Actor, Inventory);
+				UpdateCombatDecision(
+					Blackboard,
+					ClassifyZombie(Actor),
+					NewEnemyDistance,
+					Inventory
+				);
 			}
 			else
 			{
 				UE_LOG(LogTemp, Warning, TEXT("KEEPING current TargetEnemy: %s"), *CurrentEnemy->GetName());
 
-				SetBasicEnemyDecisionBlackboard(Blackboard, Inventory);
-				UpdateEnemyDecisionBlackboard(Blackboard, OwnerPawn, CurrentEnemy, Inventory);
+				UpdateCombatDecision(
+					Blackboard,
+					ClassifyZombie(CurrentEnemy),
+					CurrentEnemyDistance,
+					Inventory
+				);
 			}
 		}
 		else
 		{
+			// stimulus location on lost sight is still perception information so keep it as last known spot
+			LastKnownEnemyLocations.Add(EnemyKey, Stimulus.StimulusLocation);
+			LastEnemySeenTimes.Add(EnemyKey, CurrentTime);
+			VisibleEnemies.Remove(EnemyKey);
+
 			UE_LOG(LogTemp, Warning, TEXT("LOST TargetEnemy, keeping memory"));
+
+			if (Blackboard->GetValueAsObject(SurvivorBB::TargetEnemy) == Actor)
+			{
+				// cannot attack something we cannot currently see
+				Blackboard->SetValueAsBool(SurvivorBB::ShouldAttackEnemy, false);
+				Blackboard->SetValueAsBool(SurvivorBB::ShouldFleeToHouse, false);
+				Blackboard->SetValueAsBool(SurvivorBB::ShouldFleeEnemy, true);
+			}
 		}
 
 		return;
@@ -777,7 +991,8 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 	{
 		if (Stimulus.WasSuccessfullySensed())
 		{
-			LastVillageLocation = Actor->GetActorLocation();
+			// house is static but still store location perception actually gave us
+			LastVillageLocation = Stimulus.StimulusLocation;
 			bHasLastVillageLocation = true;
 
 			if (!KnownHouses.Contains(Actor) && !SearchedHouses.Contains(Actor))
@@ -808,12 +1023,12 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 		// if inventory is full, there is no point in chasing the loot & clear TargetItem
 		if (!InventoryHasFreeSlot(Inventory))
 		{
-			Blackboard->ClearValue(TEXT("TargetItem"));
+			Blackboard->ClearValue(SurvivorBB::TargetItem);
 			UE_LOG(LogTemp, Warning, TEXT("Inventory full, ignoring item: %s"), *Actor->GetName());
 			return;
 		}
 
-		AActor* CurrentTargetItem = Cast<AActor>(Blackboard->GetValueAsObject(TEXT("TargetItem")));
+		AActor* CurrentTargetItem = Cast<AActor>(Blackboard->GetValueAsObject(SurvivorBB::TargetItem));
 
 		// score newly perceived item
 		// score = item priority - distance penalty
@@ -838,7 +1053,7 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 		if (!CurrentTargetItem || NewScore > CurrentScore)
 		{
 			UE_LOG(LogTemp, Warning, TEXT("SETTING TargetItem: %s | Score: %.2f"), *Actor->GetName(), NewScore);
-			Blackboard->SetValueAsObject(TEXT("TargetItem"), Actor);
+			Blackboard->SetValueAsObject(SurvivorBB::TargetItem, Actor);
 		}
 		else
 		{
