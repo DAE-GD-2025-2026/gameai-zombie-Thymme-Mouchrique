@@ -98,4 +98,7 @@ private:
 	bool bVillageSweepConfirmedEmpty = false;
 
 	bool HasVillageCampingResources() const;
+
+	float SurvivalTime = 0.f;
+	bool bLoggedDeath = false;
 };

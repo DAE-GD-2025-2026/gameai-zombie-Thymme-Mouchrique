@@ -495,6 +495,17 @@ void UStudentPerceptor::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 		return;
 	}
 
+	if (Health->GetHealth() > 0)
+	{
+		SurvivalTime += DeltaTime;
+	}
+	else if (!bLoggedDeath)
+	{
+		bLoggedDeath = true;
+
+		UE_LOG(LogTemp,Warning,TEXT("Player survived %.2f seconds"),SurvivalTime);
+	}
+
 	// hack fix for not finding anything
 	// do a 360 scan on spawn to find houses on spawn
 	if (!bDidInitialScan)
