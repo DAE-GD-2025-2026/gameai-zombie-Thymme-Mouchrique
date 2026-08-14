@@ -5,8 +5,6 @@
 #include "Items/ItemType.h"
 #include "Common/InventoryComponent.h"
 
-// helper file to centralize duplicated names (such as blackboard values)
-
 namespace SurvivorBB
 {
 	static const FName TargetEnemy(TEXT("TargetEnemy"));
@@ -21,6 +19,7 @@ namespace SurvivorBB
 	static const FName IsLowHealth(TEXT("IsLowHealth"));
 	static const FName IsLowEnergy(TEXT("IsLowEnergy"));
 	static const FName IsRunnerEnemy(TEXT("IsRunnerEnemy"));
+	static const FName IsTravellingBetweenVillages(TEXT("IsTravellingBetweenVillages"));
 }
 
 enum class EKnownZombieType : uint8
@@ -38,67 +37,31 @@ inline bool IsWeaponItemType(const EItemType ItemType)
 
 inline bool IsUsableWeaponItem(const ABaseItem* Item)
 {
-	return Item &&
-		IsWeaponItemType(Item->GetItemType()) &&
-		Item->GetValue() > 0;
+	return Item && IsWeaponItemType(Item->GetItemType()) && Item->GetValue() > 0;
 }
 
 inline bool InventoryHasUsableWeapon(const UInventoryComponent* Inventory)
 {
-	if (!Inventory)
-	{
-		return false;
-	}
-
+	if (!Inventory) return false;
 	for (const ABaseItem* Item : Inventory->GetInventory())
-	{
-		if (IsUsableWeaponItem(Item))
-		{
-			return true;
-		}
-	}
-
+		if (IsUsableWeaponItem(Item)) return true;
 	return false;
 }
 
 inline int GetTotalUsableAmmo(const UInventoryComponent* Inventory)
 {
-	if (!Inventory)
-	{
-		return 0;
-	}
-
+	if (!Inventory) return 0;
 	int TotalAmmo = 0;
-
 	for (const ABaseItem* Item : Inventory->GetInventory())
-	{
-		if (IsUsableWeaponItem(Item))
-		{
-			TotalAmmo += FMath::Max(0, Item->GetValue());
-		}
-	}
-
+		if (IsUsableWeaponItem(Item)) TotalAmmo += FMath::Max(0, Item->GetValue());
 	return TotalAmmo;
 }
 
 inline EKnownZombieType ClassifyZombie(const AActor* Zombie)
 {
-	if (!Zombie)
-	{
-		return EKnownZombieType::Unknown;
-	}
-
+	if (!Zombie) return EKnownZombieType::Unknown;
 	const FString Name = Zombie->GetName();
-
-	if (Name.Contains(TEXT("Runner")))
-	{
-		return EKnownZombieType::Runner;
-	}
-
-	if (Name.Contains(TEXT("Heavy")))
-	{
-		return EKnownZombieType::Heavy;
-	}
-
+	if (Name.Contains(TEXT("Runner"))) return EKnownZombieType::Runner;
+	if (Name.Contains(TEXT("Heavy"))) return EKnownZombieType::Heavy;
 	return EKnownZombieType::Normal;
 }

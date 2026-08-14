@@ -1,5 +1,5 @@
 #include "BTTask_GrabTargetItem.h"
-
+#include "StudentPerceptorThymmeMouchrique.h"
 #include "AIController.h"
 #include "BehaviorTree/BlackboardComponent.h"
 #include "GameFramework/Pawn.h"
@@ -65,8 +65,13 @@ EBTNodeResult::Type UBTTask_GrabTargetItem::ExecuteTask(UBehaviorTreeComponent& 
 	{
 		UE_LOG(LogTemp, Warning, TEXT("Grabbed item: %s"), *Item->GetName());
 
-		// update weapon state from actual inventory instead of item name
+		// update weapon state
 		Blackboard->SetValueAsBool(SurvivorBB::HasWeapon, InventoryHasUsableWeapon(Inventory));
+
+		if (UStudentPerceptor* Perceptor = Pawn->FindComponentByClass<UStudentPerceptor>())
+		{
+			Perceptor->MarkItemCollected(Item);
+		}
 
 		Blackboard->ClearValue(SurvivorBB::TargetItem);
 

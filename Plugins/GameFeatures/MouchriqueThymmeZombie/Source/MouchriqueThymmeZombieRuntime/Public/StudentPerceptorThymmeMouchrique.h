@@ -29,9 +29,17 @@ public:
 	virtual void OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus);
 
 	bool TryUpdateTargetHouse();
+	bool TryUpdateKnownWeaponTarget();
+
 	bool GetVillageExploreLocation(FVector& OutLocation) const;
 	bool GetVillageCircleExploreLocation(FVector& OutLocation);
 	void ResetVillageExploreIndex();
+
+	// true once no houses/guns are known left in the village AND we're out of guns ourselves
+	bool IsVillageDepleted() const;
+
+	// call when an item is actually picked up so it stops counting as known loot
+	void MarkItemCollected(AActor* Item);
 
 	// check if enemy is actually visible right now and not just remembered
 	bool IsEnemyCurrentlyVisible(const AActor* Enemy) const;
@@ -54,6 +62,9 @@ private:
 
 	UPROPERTY()
 	TArray<TObjectPtr<AActor>> SearchedHouses;
+
+	UPROPERTY()
+	TArray<TObjectPtr<AActor>> KnownVillageWeapons;
 
 	// hack fix for player getting hit by an enemy up their butt but not sensing it
 	int LastHealth = -1;
@@ -84,4 +95,7 @@ private:
 	FVector LastVillageLocation = FVector::ZeroVector;
 	bool bHasLastVillageLocation = false;
 	int VillageExploreIndex = 0;
+	bool bVillageSweepConfirmedEmpty = false;
+
+	bool HasVillageCampingResources() const;
 };

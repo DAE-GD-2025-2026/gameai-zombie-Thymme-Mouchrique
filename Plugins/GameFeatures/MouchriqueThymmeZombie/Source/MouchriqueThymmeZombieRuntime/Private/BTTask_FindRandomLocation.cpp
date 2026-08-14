@@ -4,9 +4,9 @@
 #include "BehaviorTree/BlackboardComponent.h"
 #include "GameFramework/Pawn.h"
 #include "NavigationSystem.h"
-#include "DrawDebugHelpers.h"
 
 #include "StudentPerceptorThymmeMouchrique.h"
+#include "SurvivorAIShared.h"
 
 UBTTask_FindRandomLocation::UBTTask_FindRandomLocation()
 {
@@ -37,43 +37,6 @@ EBTNodeResult::Type UBTTask_FindRandomLocation::ExecuteTask(UBehaviorTreeCompone
 		return EBTNodeResult::Failed;
 	}
 
-	FVector VillageExploreLocation;
-
-	if (StudentPerceptor->GetVillageCircleExploreLocation(VillageExploreLocation))
-	{
-		Blackboard->SetValueAsVector(TEXT("MoveLocation"), VillageExploreLocation);
-		Blackboard->SetValueAsVector(TEXT("LastExploreLocation"), VillageExploreLocation);
-
-		UE_LOG(
-			LogTemp,
-			Warning,
-			TEXT("[Explore] Circle exploring around last known village.")
-		);
-
-		DrawDebugSphere(
-			Pawn->GetWorld(),
-			VillageExploreLocation,
-			80.f,
-			12,
-			FColor::Green,
-			false,
-			1.f
-		);
-
-		DrawDebugLine(
-			Pawn->GetWorld(),
-			Pawn->GetActorLocation(),
-			VillageExploreLocation,
-			FColor::Green,
-			false,
-			1.f,
-			0,
-			3.f
-		);
-
-		return EBTNodeResult::Succeeded;
-	}
-
 	UNavigationSystemV1* NavSystem = UNavigationSystemV1::GetCurrent(Pawn->GetWorld());
 
 	if (!NavSystem)
@@ -100,7 +63,7 @@ EBTNodeResult::Type UBTTask_FindRandomLocation::ExecuteTask(UBehaviorTreeCompone
 		Blackboard->SetValueAsVector(TEXT("ExploreDirection"), ExploreDirection);
 	}
 
-	constexpr float ExploreRadius = 1000.f;
+	constexpr float ExploreRadius = 1400.f;
 	constexpr float MinimumDistanceFromLastTarget = 700.f;
 
 	FNavLocation BestLocation;
@@ -113,6 +76,11 @@ EBTNodeResult::Type UBTTask_FindRandomLocation::ExecuteTask(UBehaviorTreeCompone
 		FNavLocation CandidateLocation;
 
 		if (!NavSystem->GetRandomReachablePointInRadius(PawnLocation, ExploreRadius, CandidateLocation))
+		{
+			continue;
+		}
+
+		if (StudentPerceptor->IsInRecentDangerZone(CandidateLocation.Location))
 		{
 			continue;
 		}
@@ -167,6 +135,7 @@ EBTNodeResult::Type UBTTask_FindRandomLocation::ExecuteTask(UBehaviorTreeCompone
 
 	Blackboard->SetValueAsVector(TEXT("MoveLocation"), BestLocation.Location);
 	Blackboard->SetValueAsVector(TEXT("LastExploreLocation"), BestLocation.Location);
+	Blackboard->SetValueAsBool(SurvivorBB::IsTravellingBetweenVillages, true);
 
 	return EBTNodeResult::Succeeded;
 }

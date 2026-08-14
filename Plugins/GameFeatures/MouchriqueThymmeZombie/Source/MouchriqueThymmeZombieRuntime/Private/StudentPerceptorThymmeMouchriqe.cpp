@@ -91,7 +91,6 @@ namespace
 		const bool bHasWeapon = InventoryHasUsableWeapon(Inventory);
 		const int Ammo = GetTotalUsableAmmo(Inventory);
 		const bool bLowHealth = Blackboard->GetValueAsBool(SurvivorBB::IsLowHealth);
-		const bool bHasTargetHouse = Blackboard->GetValueAsObject(SurvivorBB::TargetHouse) != nullptr;
 
 		bool bShouldFleeToHouse = false;
 		bool bShouldAttackEnemy = false;
@@ -114,8 +113,8 @@ namespace
 		}
 		else if (bIsHeavy)
 		{
-			// heavy is slow but takes a lot of ammo so only fight if close and we have enough
-			if (bHasWeapon && !bLowHealth && EnemyDistance < 500.f && Ammo >= 5)
+			// heavy is slow so fight it if we have enough ammo and health
+			if (bHasWeapon && !bLowHealth && Ammo >= 5)
 			{
 				bShouldAttackEnemy = true;
 			}
@@ -399,7 +398,7 @@ void UStudentPerceptor::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 				const float TimeSinceSeen = CurrentTime - *LastSeenTime;
 				const float DistanceFromEnemy = FVector::Dist2D(OwnerPawn->GetActorLocation(), *LastKnownLocation);
 
-				if (TimeSinceSeen > 4.f && DistanceFromEnemy > 1200.f)
+				if (DistanceFromEnemy > 1100.f || (TimeSinceSeen > 6.f && DistanceFromEnemy > 700.f))
 				{
 					// remember roughly where we just escaped from so we don't explore straight back into it
 					LastDangerLocation = *LastKnownLocation;
@@ -434,7 +433,7 @@ void UStudentPerceptor::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 		{
 			if (SelfHealth && SelfHealth->GetMaxHealth() > 0)
 			{
-				const float HealthRatio = static_cast<float>(SelfHealth->GetHealth()) 
+				const float HealthRatio = static_cast<float>(SelfHealth->GetHealth())
 					/ static_cast<float>(SelfHealth->GetMaxHealth());
 
 				Blackboard->SetValueAsBool(SurvivorBB::IsLowHealth, HealthRatio <= 0.35f);
@@ -447,6 +446,12 @@ void UStudentPerceptor::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 			}
 
 			Blackboard->SetValueAsBool(SurvivorBB::HasWeapon, InventoryHasUsableWeapon(Inventory));
+
+			// if we ran out of ammo, check guns we already saw before wandering around again
+			if (!InventoryHasUsableWeapon(Inventory))
+			{
+				TryUpdateKnownWeaponTarget();
+			}
 
 			// update enemy decision too because ammo can change without a new perception event
 			AActor* TargetEnemy = Cast<AActor>(Blackboard->GetValueAsObject(SurvivorBB::TargetEnemy));
@@ -621,6 +626,13 @@ bool UStudentPerceptor::TryUpdateTargetHouse()
 		return false;
 	}
 
+	AActor* CurrentTargetHouse = Cast<AActor>(Blackboard->GetValueAsObject(TEXT("TargetHouse")));
+
+	if (CurrentTargetHouse && IsValid(CurrentTargetHouse) && !SearchedHouses.Contains(CurrentTargetHouse))
+	{
+		return true;
+	}
+
 	AActor* ClosestHouse = GetClosestKnownUnsearchedHouse(OwnerPawn->GetActorLocation());
 
 	if (!ClosestHouse)
@@ -636,7 +648,68 @@ bool UStudentPerceptor::TryUpdateTargetHouse()
 
 	return true;
 }
+bool UStudentPerceptor::TryUpdateKnownWeaponTarget()
+{
+	APawn* OwnerPawn = Cast<APawn>(GetOwner());
 
+	if (!OwnerPawn)
+	{
+		return false;
+	}
+
+	AAIController* AIController = Cast<AAIController>(OwnerPawn->GetController());
+
+	if (!AIController)
+	{
+		return false;
+	}
+
+	UBlackboardComponent* Blackboard = AIController->GetBlackboardComponent();
+	UInventoryComponent* Inventory = OwnerPawn->FindComponentByClass<UInventoryComponent>();
+
+	if (!Blackboard || !Inventory)
+	{
+		return false;
+	}
+
+	// already going for something
+	if (Blackboard->GetValueAsObject(SurvivorBB::TargetItem))
+	{
+		return true;
+	}
+
+	AActor* BestWeapon = nullptr;
+	float BestScore = 0.f;
+
+	for (int Index = KnownVillageWeapons.Num() - 1; Index >= 0; --Index)
+	{
+		AActor* Weapon = KnownVillageWeapons[Index];
+
+		if (!IsValid(Weapon))
+		{
+			KnownVillageWeapons.RemoveAt(Index);
+			continue;
+		}
+
+		const float Score = GetItemScore(Weapon, Blackboard, Inventory, OwnerPawn->GetActorLocation());
+
+		if (Score > BestScore)
+		{
+			BestScore = Score;
+			BestWeapon = Weapon;
+		}
+	}
+
+	if (!BestWeapon)
+	{
+		return false;
+	}
+
+	UE_LOG(LogTemp, Warning, TEXT("SETTING remembered weapon TargetItem: %s | Score: %.2f"), *BestWeapon->GetName(), BestScore);
+	Blackboard->SetValueAsObject(SurvivorBB::TargetItem, BestWeapon);
+
+	return true;
+}
 bool UStudentPerceptor::GetVillageExploreLocation(FVector& OutLocation) const
 {
 	if (!bHasLastVillageLocation)
@@ -679,18 +752,12 @@ bool UStudentPerceptor::GetVillageExploreLocation(FVector& OutLocation) const
 
 bool UStudentPerceptor::GetVillageCircleExploreLocation(FVector& OutLocation)
 {
-	if (!bHasLastVillageLocation)
+	if (!bHasLastVillageLocation || bVillageSweepConfirmedEmpty)
 	{
 		return false;
 	}
 
 	constexpr int MaxVillageExplorePoints = 8;
-
-	if (VillageExploreIndex >= MaxVillageExplorePoints)
-	{
-		UE_LOG(LogTemp, Warning, TEXT("[VillageExplore] Finished circle sweep."));
-		return false;
-	}
 
 	UWorld* World = GetWorld();
 
@@ -754,13 +821,23 @@ bool UStudentPerceptor::GetVillageCircleExploreLocation(FVector& OutLocation)
 		return true;
 	}
 
-	UE_LOG(LogTemp, Warning, TEXT("[VillageExplore] Finished circle sweep."));
+	// keep camping while there are still guns to use or resources we already know about
+	if (HasVillageCampingResources())
+	{
+		VillageExploreIndex = 0;
+		UE_LOG(LogTemp, Warning, TEXT("[VillageExplore] Still have village resources/guns, wandering another sweep."));
+		return GetVillageCircleExploreLocation(OutLocation);
+	}
+
+	bVillageSweepConfirmedEmpty = true;
+	UE_LOG(LogTemp, Warning, TEXT("[VillageExplore] Village depleted, time to find another one."));
 	return false;
 }
 
 void UStudentPerceptor::ResetVillageExploreIndex()
 {
 	VillageExploreIndex = 0;
+	bVillageSweepConfirmedEmpty = false;
 }
 
 bool UStudentPerceptor::IsEnemyCurrentlyVisible(const AActor* Enemy) const
@@ -822,6 +899,40 @@ bool UStudentPerceptor::GetLastKnownPurgeLocation(FVector& OutLocation) const
 
 	OutLocation = LastKnownPurgeLocation;
 	return true;
+}
+bool UStudentPerceptor::HasVillageCampingResources() const
+{
+	if (KnownHouses.Num() > 0)
+	{
+		return true;
+	}
+
+	for (const AActor* Weapon : KnownVillageWeapons)
+	{
+		if (IsValid(Weapon))
+		{
+			return true;
+		}
+	}
+
+	// if we still have ammo from this village, keep camping and use it before moving on
+	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
+	const UInventoryComponent* Inventory = OwnerPawn ? OwnerPawn->FindComponentByClass<UInventoryComponent>() : nullptr;
+
+	return InventoryHasUsableWeapon(Inventory) || GetTotalUsableAmmo(Inventory) > 0;
+}
+
+bool UStudentPerceptor::IsVillageDepleted() const
+{
+	return bHasLastVillageLocation && bVillageSweepConfirmedEmpty && !HasVillageCampingResources();
+}
+
+void UStudentPerceptor::MarkItemCollected(AActor* Item)
+{
+	if (KnownVillageWeapons.Remove(Item) > 0)
+	{
+		ResetVillageExploreIndex();
+	}
 }
 
 bool UStudentPerceptor::IsInRecentDangerZone(const FVector& Location) const
@@ -993,7 +1104,7 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 			const float NewEnemyDistance = FVector::Dist2D(OwnerPawn->GetActorLocation(), Stimulus.StimulusLocation);
 
 			const float CurrentEnemyDistance = bHasCurrentEnemyLocation ? FVector::Dist2D(OwnerPawn->GetActorLocation(),
-					CurrentEnemyLocation)
+				CurrentEnemyLocation)
 				: TNumericLimits<float>::Max();
 
 			// visible enemy should replace an old invisible target instead of comparing against stale distance
@@ -1049,6 +1160,7 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 			// house is static but still store location perception actually gave us
 			LastVillageLocation = Stimulus.StimulusLocation;
 			bHasLastVillageLocation = true;
+			Blackboard->SetValueAsBool(SurvivorBB::IsTravellingBetweenVillages, false);
 
 			if (!KnownHouses.Contains(Actor) && !SearchedHouses.Contains(Actor))
 			{
@@ -1073,6 +1185,17 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 		if (!Stimulus.WasSuccessfullySensed())
 		{
 			return;
+		}
+
+		// remember weapons specifically 
+		// medkits/food are grabbed opportunistically
+		if (const ABaseItem* SeenItem = Cast<ABaseItem>(Actor))
+		{
+			if (IsWeaponItemType(SeenItem->GetItemType()) && !KnownVillageWeapons.Contains(Actor))
+			{
+				KnownVillageWeapons.Add(Actor);
+				ResetVillageExploreIndex();
+			}
 		}
 
 		// if inventory is full, there is no point in chasing the loot & clear TargetItem

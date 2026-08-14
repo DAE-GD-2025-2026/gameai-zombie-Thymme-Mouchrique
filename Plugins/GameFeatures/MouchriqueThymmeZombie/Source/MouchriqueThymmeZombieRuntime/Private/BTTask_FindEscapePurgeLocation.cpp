@@ -70,7 +70,7 @@ EBTNodeResult::Type UBTTask_FindEscapePurgeLocation::ExecuteTask(UBehaviorTreeCo
 		return EBTNodeResult::Failed;
 	}
 
-	constexpr float EscapeDistance = 900.f;
+	constexpr float EscapeDistance = 250.f;
 	constexpr float SearchRadius = 450.f;
 
 	const FVector DesiredLocation = PawnLocation + DirectionAway * EscapeDistance;
