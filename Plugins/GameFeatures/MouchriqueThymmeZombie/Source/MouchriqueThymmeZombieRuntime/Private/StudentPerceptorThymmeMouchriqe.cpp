@@ -89,7 +89,6 @@ namespace
 		}
 
 		const bool bHasWeapon = InventoryHasUsableWeapon(Inventory);
-		const int Ammo = GetTotalUsableAmmo(Inventory);
 		const bool bLowHealth = Blackboard->GetValueAsBool(SurvivorBB::IsLowHealth);
 
 		bool bShouldFleeToHouse = false;
@@ -102,19 +101,19 @@ namespace
 		if (bIsRunner)
 		{
 			// Runner is faster than the player
-			if (!bHasWeapon || bLowHealth)
+			if (bHasWeapon && !bLowHealth)
 			{
-				bShouldFleeEnemy = true;
+				bShouldAttackEnemy = true;
 			}
 			else
 			{
-				bShouldAttackEnemy = true;
+				bShouldFleeEnemy = true;
 			}
 		}
 		else if (bIsHeavy)
 		{
-			// heavy is slow so fight it if we have enough ammo and health
-			if (bHasWeapon && !bLowHealth && Ammo >= 5)
+			// heavy hits hard so use the gun if we still have one instead of wasting time running
+			if (bHasWeapon && !bLowHealth)
 			{
 				bShouldAttackEnemy = true;
 			}
@@ -125,8 +124,8 @@ namespace
 		}
 		else
 		{
-			// Normal/heavy zombies are less urgent
-			if (bHasWeapon && !bLowHealth && (Ammo >= 2 || EnemyDistance < 450.f))
+			// normal zombie is worth fighting while we still have ammo
+			if (bHasWeapon && !bLowHealth)
 			{
 				bShouldAttackEnemy = true;
 			}
@@ -198,16 +197,7 @@ namespace
 
 		const bool bHasUsableWeapon = InventoryHasUsableWeapon(Inventory);
 
-		// "basic kit" just means having at least one of each type of item
-		const bool bHasBasicKit = bHasPistol && bHasShotgun && bHasMedkit && bHasFood;
-
-		const bool bItemIsDuplicate =
-			(ItemType == EItemType::Pistol && bHasPistol) ||
-			(ItemType == EItemType::Shotgun && bHasShotgun) ||
-			(ItemType == EItemType::Medkit && bHasMedkit) ||
-			(ItemType == EItemType::Food && bHasFood);
-
-		// critical stuff should come before trying to complete the basic kit
+		// critical stuff should come before normal looting
 		if (ItemType == EItemType::Medkit && bLowHealth)
 		{
 			return 200;
@@ -220,52 +210,28 @@ namespace
 
 		if (IsWeaponItemType(ItemType) && !bHasUsableWeapon && Item->GetValue() > 0)
 		{
-			return 160;
+			return 170;
 		}
 
-		// prevent player gathering duplicate objects if it does not have 1 of each first
-		if (!bHasBasicKit && bItemIsDuplicate)
-		{
-			return 0;
-		}
-
-		// pistol = 120
-		// shotgun = 100
-		// medkit = 90
-		// food = 80
-
-		// extra medkit if low HP = 70
-		// extra food if low stamina = 60
-		// extra weapon duplicate = 20
-
+		// extra guns are still useful because every gun is more ammo later
 		if (ItemType == EItemType::Pistol)
 		{
-			return bHasPistol ? 20 : 120;
+			return bHasPistol ? 80 : 130;
 		}
 
 		if (ItemType == EItemType::Shotgun)
 		{
-			return bHasShotgun ? 20 : 100;
+			return bHasShotgun ? 70 : 120;
 		}
 
 		if (ItemType == EItemType::Medkit)
 		{
-			if (!bHasMedkit)
-			{
-				return 90;
-			}
-
-			return 10;
+			return bHasMedkit ? 35 : 100;
 		}
 
 		if (ItemType == EItemType::Food)
 		{
-			if (!bHasFood)
-			{
-				return 80;
-			}
-
-			return 10;
+			return bHasFood ? 15 : 80;
 		}
 
 		return 0;
@@ -408,7 +374,7 @@ void UStudentPerceptor::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 				const float TimeSinceSeen = CurrentTime - *LastSeenTime;
 				const float DistanceFromEnemy = FVector::Dist2D(OwnerPawn->GetActorLocation(), *LastKnownLocation);
 
-				if (DistanceFromEnemy > 1100.f || (TimeSinceSeen > 6.f && DistanceFromEnemy > 700.f))
+				if (TimeSinceSeen > 2.0f && DistanceFromEnemy > 1000.f)
 				{
 					// remember roughly where we just escaped from so we don't explore straight back into it
 					LastDangerLocation = *LastKnownLocation;
@@ -503,7 +469,7 @@ void UStudentPerceptor::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 	{
 		bLoggedDeath = true;
 
-		UE_LOG(LogTemp,Warning,TEXT("Player survived %.2f seconds"),SurvivalTime);
+		UE_LOG(LogTemp, Warning, TEXT("Player survived %.2f seconds"), SurvivalTime);
 	}
 
 	// hack fix for not finding anything
@@ -557,14 +523,19 @@ void UStudentPerceptor::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 
 		if (!bCanSeeTargetEnemy)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("[STUDENTPERCEPTOR] Health dropped. No visible enemy, turning around to scan."));
+			const bool bAlreadyFleeing = Blackboard && Blackboard->GetValueAsBool(SurvivorBB::ShouldFleeEnemy);
 
-			AIController->StopMovement();
-			OwnerPawn->AddActorWorldRotation(FRotator(0.f, 180.f, 0.f));
-		}
-		else
-		{
-			UE_LOG(LogTemp, Warning, TEXT("[STUDENTPERCEPTOR] Health dropped, but target enemy is visible. Not turning around."));
+			if (!bAlreadyFleeing)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("[STUDENTPERCEPTOR] Health dropped. No visible enemy, turning around to scan."));
+
+				AIController->StopMovement();
+				OwnerPawn->AddActorWorldRotation(FRotator(0.f, 180.f, 0.f));
+			}
+			else
+			{
+				UE_LOG(LogTemp, Warning, TEXT("[STUDENTPERCEPTOR] Health dropped while fleeing, keep moving."));
+			}
 		}
 
 		LastDamageReactionTime = CurrentTime;
@@ -851,7 +822,7 @@ bool UStudentPerceptor::GetVillageCircleExploreLocation(FVector& OutLocation)
 
 		for (int Attempt = 0; Attempt < 6; ++Attempt)
 		{
-			if (!NavSystem->GetRandomReachablePointInRadius(LastVillageLocation,700.f,FallbackLocation))
+			if (!NavSystem->GetRandomReachablePointInRadius(LastVillageLocation, 700.f, FallbackLocation))
 			{
 				continue;
 			}
@@ -992,7 +963,7 @@ bool UStudentPerceptor::IsInRecentDangerZone(const FVector& Location) const
 	}
 
 	// put a cooldown on it so that we don't avoid this place forever	
-	constexpr float DangerCooldown = 10.f;
+	constexpr float DangerCooldown = 6.f;
 	constexpr float DangerRadius = 800.f;
 
 	if (World->GetTimeSeconds() - LastDangerTime > DangerCooldown)
@@ -1000,7 +971,27 @@ bool UStudentPerceptor::IsInRecentDangerZone(const FVector& Location) const
 		return false;
 	}
 
-	return FVector::Dist2D(Location, LastDangerLocation) < DangerRadius;
+	const float CandidateDistance = FVector::Dist2D(Location, LastDangerLocation);
+
+	if (CandidateDistance < DangerRadius)
+	{
+		return true;
+	}
+
+	// once we escaped, don't instantly pick a point that walks back toward the same zombie
+	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
+
+	if (OwnerPawn)
+	{
+		const float CurrentDistance = FVector::Dist2D(OwnerPawn->GetActorLocation(), LastDangerLocation);
+
+		if (CandidateDistance + 100.f < CurrentDistance)
+		{
+			return true;
+		}
+	}
+
+	return false;
 }
 
 
@@ -1185,7 +1176,6 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 		{
 			// stimulus location on lost sight is still perception information so keep it as last known spot
 			LastKnownEnemyLocations.Add(EnemyKey, Stimulus.StimulusLocation);
-			LastEnemySeenTimes.Add(EnemyKey, CurrentTime);
 			VisibleEnemies.Remove(EnemyKey);
 
 			UE_LOG(LogTemp, Warning, TEXT("LOST TargetEnemy, keeping memory"));
@@ -1195,7 +1185,12 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 				// cannot attack something we cannot currently see
 				Blackboard->SetValueAsBool(SurvivorBB::ShouldAttackEnemy, false);
 				Blackboard->SetValueAsBool(SurvivorBB::ShouldFleeToHouse, false);
-				Blackboard->SetValueAsBool(SurvivorBB::ShouldFleeEnemy, true);
+
+				// if we were already fleeing, keep fleeing until the normal memory timeout says we got away
+				if (Blackboard->GetValueAsBool(SurvivorBB::ShouldFleeEnemy))
+				{
+					Blackboard->SetValueAsBool(SurvivorBB::ShouldFleeEnemy, true);
+				}
 			}
 		}
 

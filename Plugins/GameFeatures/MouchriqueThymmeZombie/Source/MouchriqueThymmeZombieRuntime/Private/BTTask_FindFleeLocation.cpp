@@ -3,14 +3,16 @@
 #include "AIController.h"
 #include "BehaviorTree/BlackboardComponent.h"
 #include "NavigationSystem.h"
-#include "GameFramework/Pawn.h"
 
+#include "Survivor/SurvivorPawn.h"
 #include "StudentPerceptorThymmeMouchrique.h"
 #include "SurvivorAIShared.h"
 
 UBTTask_FindFleeLocation::UBTTask_FindFleeLocation()
 {
 	NodeName = TEXT("Find Flee Location");
+	bNotifyTick = true;
+	bCreateNodeInstance = true;
 }
 
 EBTNodeResult::Type UBTTask_FindFleeLocation::ExecuteTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory)
@@ -26,7 +28,7 @@ EBTNodeResult::Type UBTTask_FindFleeLocation::ExecuteTask(UBehaviorTreeComponent
 		return EBTNodeResult::Failed;
 	}
 
-	APawn* Pawn = Controller->GetPawn();
+	ASurvivorPawn* Pawn = Cast<ASurvivorPawn>(Controller->GetPawn());
 
 	if (!Pawn)
 	{
@@ -41,13 +43,86 @@ EBTNodeResult::Type UBTTask_FindFleeLocation::ExecuteTask(UBehaviorTreeComponent
 		return EBTNodeResult::Failed;
 	}
 
+	Pawn->StartRunning();
+	MoveRefreshTimer = 0.f;
+
+	if (!UpdateFleeMove(OwnerComp))
+	{
+		// no point yet, keep the flee task alive and try again next update
+		UE_LOG(LogTemp, Warning, TEXT("[FleeTask] no first point yet, retrying"));
+	}
+
+	return EBTNodeResult::InProgress;
+}
+
+void UBTTask_FindFleeLocation::TickTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory, float DeltaSeconds)
+{
+	UBlackboardComponent* Blackboard = OwnerComp.GetBlackboardComponent();
+	AAIController* Controller = OwnerComp.GetAIOwner();
+
+	if (!Blackboard || !Controller)
+	{
+		StopRunning(OwnerComp);
+		FinishLatentTask(OwnerComp, EBTNodeResult::Failed);
+		return;
+	}
+
+	if (!Blackboard->GetValueAsBool(SurvivorBB::ShouldFleeEnemy) ||
+		!Blackboard->GetValueAsObject(SurvivorBB::TargetEnemy))
+	{
+		StopRunning(OwnerComp);
+		UE_LOG(LogTemp, Warning, TEXT("[FleeTask] finished"));
+		FinishLatentTask(OwnerComp, EBTNodeResult::Succeeded);
+		return;
+	}
+
+	MoveRefreshTimer += DeltaSeconds;
+
+	// update the flee point while the zombie moves instead of committing to one old point
+	if (MoveRefreshTimer < 0.45f)
+	{
+		return;
+	}
+
+	MoveRefreshTimer = 0.f;
+
+	if (!UpdateFleeMove(OwnerComp))
+	{
+		// keep the current move instead of freezing because one refresh failed
+		UE_LOG(LogTemp, Warning, TEXT("[FleeTask] could not refresh flee point, keeping current move"));
+	}
+}
+
+EBTNodeResult::Type UBTTask_FindFleeLocation::AbortTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory)
+{
+	StopRunning(OwnerComp);
+	return EBTNodeResult::Aborted;
+}
+
+bool UBTTask_FindFleeLocation::UpdateFleeMove(UBehaviorTreeComponent& OwnerComp)
+{
+	UBlackboardComponent* Blackboard = OwnerComp.GetBlackboardComponent();
+	AAIController* Controller = OwnerComp.GetAIOwner();
+
+	if (!Blackboard || !Controller)
+	{
+		return false;
+	}
+
+	ASurvivorPawn* Pawn = Cast<ASurvivorPawn>(Controller->GetPawn());
+
+	if (!Pawn)
+	{
+		return false;
+	}
+
 	AActor* Enemy = Cast<AActor>(Blackboard->GetValueAsObject(SurvivorBB::TargetEnemy));
 	UStudentPerceptor* Perceptor = Pawn->FindComponentByClass<UStudentPerceptor>();
 
 	if (!Enemy || !Perceptor)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("[FleeTask] failed: no enemy or perceptor"));
-		return EBTNodeResult::Failed;
+		return false;
 	}
 
 	FVector EnemyLocation;
@@ -56,7 +131,7 @@ EBTNodeResult::Type UBTTask_FindFleeLocation::ExecuteTask(UBehaviorTreeComponent
 	if (!Perceptor->GetLastKnownEnemyLocation(Enemy, EnemyLocation))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("[FleeTask] failed: no enemy location"));
-		return EBTNodeResult::Failed;
+		return false;
 	}
 
 	const FVector PawnLocation = Pawn->GetActorLocation();
@@ -66,7 +141,7 @@ EBTNodeResult::Type UBTTask_FindFleeLocation::ExecuteTask(UBehaviorTreeComponent
 	if (!NavSystem)
 	{
 		UE_LOG(LogTemp, Warning, TEXT("[FleeTask] failed: no navigation system"));
-		return EBTNodeResult::Failed;
+		return false;
 	}
 
 	FVector DirectionAway = PawnLocation - EnemyLocation;
@@ -85,58 +160,6 @@ EBTNodeResult::Type UBTTask_FindFleeLocation::ExecuteTask(UBehaviorTreeComponent
 
 	DirectionAway.Normalize();
 
-	// if we see a house, flee there first.
-	AActor* House = Cast<AActor>(Blackboard->GetValueAsObject(SurvivorBB::TargetHouse));
-
-	if (House && IsValid(House))
-	{
-		FVector ToHouse = House->GetActorLocation() - PawnLocation;
-		ToHouse.Z = 0.f;
-
-		if (!ToHouse.IsNearlyZero())
-		{
-			ToHouse.Normalize();
-
-			// make sure house is not basically behind the enemy
-			const float SafetyAlignment = FVector::DotProduct(ToHouse, DirectionAway);
-
-			if (SafetyAlignment >= -0.2f)
-			{
-				const float DistanceToHouse = FVector::Dist2D(PawnLocation, House->GetActorLocation());
-
-				if (DistanceToHouse > 350.f)
-				{
-					FNavLocation HouseNavLocation;
-
-					if (NavSystem->ProjectPointToNavigation(House->GetActorLocation(), HouseNavLocation))
-					{
-						const float HouseDistanceFromEnemy = FVector::Dist2D(HouseNavLocation.Location, EnemyLocation);
-						const float CurrentDistanceFromEnemy = FVector::Dist2D(PawnLocation, EnemyLocation);
-
-						if (HouseDistanceFromEnemy > CurrentDistanceFromEnemy)
-						{
-							Blackboard->SetValueAsVector(SurvivorBB::MoveLocation, HouseNavLocation.Location);
-
-							UE_LOG(
-								LogTemp,
-								Warning,
-								TEXT("[FleeTask] using house: %s | MoveLocation=%s"),
-								*House->GetName(),
-								*HouseNavLocation.Location.ToString()
-							);
-
-							return EBTNodeResult::Succeeded;
-						}
-					}
-				}
-			}
-		}
-	}
-
-	// just flee lol
-	// p sure this causes the player and enemy to endlessly run in the same direction (thus blocking each other)
-	FVector FleeDirection = DirectionAway; // this is a hack for enemy blocking player
-
 	// use visible enemies to push flee direction away from groups too
 	TArray<FVector> VisibleThreatLocations;
 	Perceptor->GetVisibleEnemyLocations(VisibleThreatLocations);
@@ -153,6 +176,8 @@ EBTNodeResult::Type UBTTask_FindFleeLocation::ExecuteTask(UBehaviorTreeComponent
 		SeparationForce += Away.GetSafeNormal() / DistanceSquared;
 	}
 
+	FVector FleeDirection = DirectionAway;
+
 	if (!SeparationForce.IsNearlyZero())
 	{
 		SeparationForce.Normalize();
@@ -164,8 +189,12 @@ EBTNodeResult::Type UBTTask_FindFleeLocation::ExecuteTask(UBehaviorTreeComponent
 		FleeDirection = DirectionAway;
 	}
 
-	constexpr float FleeDistance = 700.f;
-	constexpr float SearchRadius = 500.f;
+	// curve a little so we do not just run backwards into the same zombie
+	const FVector SideDirection(-FleeDirection.Y, FleeDirection.X, 0.f);
+	FleeDirection = (FleeDirection + SideDirection * 0.25f).GetSafeNormal();
+
+	constexpr float FleeDistance = 800.f;
+	constexpr float SearchRadius = 400.f;
 	constexpr float MinimumMoveDistance = 250.f;
 
 	const FVector DesiredLocation = PawnLocation + FleeDirection * FleeDistance;
@@ -177,17 +206,11 @@ EBTNodeResult::Type UBTTask_FindFleeLocation::ExecuteTask(UBehaviorTreeComponent
 	const float CurrentDistanceFromEnemy = FVector::Dist2D(PawnLocation, EnemyLocation);
 
 	// try a few reachable spots and choose one that actually gets further from enemy
-	for (int Attempt = 0; Attempt < 12; ++Attempt)
+	for (int Attempt = 0; Attempt < 10; ++Attempt)
 	{
 		FNavLocation CandidateLocation;
 
-		const bool bFoundCandidate = NavSystem->GetRandomReachablePointInRadius(
-			DesiredLocation,
-			SearchRadius,
-			CandidateLocation
-		);
-
-		if (!bFoundCandidate)
+		if (!NavSystem->GetRandomReachablePointInRadius(DesiredLocation, SearchRadius, CandidateLocation))
 		{
 			continue;
 		}
@@ -195,17 +218,22 @@ EBTNodeResult::Type UBTTask_FindFleeLocation::ExecuteTask(UBehaviorTreeComponent
 		const float DistanceFromEnemy = FVector::Dist2D(CandidateLocation.Location, EnemyLocation);
 		const float TravelDistance = FVector::Dist2D(PawnLocation, CandidateLocation.Location);
 
-		if (TravelDistance < MinimumMoveDistance)
+		if (TravelDistance < MinimumMoveDistance || DistanceFromEnemy <= CurrentDistanceFromEnemy)
 		{
 			continue;
 		}
 
-		if (DistanceFromEnemy <= CurrentDistanceFromEnemy)
+		float ClosestThreatDistance = DistanceFromEnemy;
+
+		for (const FVector& ThreatLocation : VisibleThreatLocations)
 		{
-			continue;
+			ClosestThreatDistance = FMath::Min(
+				ClosestThreatDistance,
+				FVector::Dist2D(CandidateLocation.Location, ThreatLocation)
+			);
 		}
 
-		const float Score = DistanceFromEnemy - TravelDistance * 0.20f;
+		const float Score = ClosestThreatDistance - TravelDistance * 0.15f;
 
 		if (Score > BestScore)
 		{
@@ -218,11 +246,11 @@ EBTNodeResult::Type UBTTask_FindFleeLocation::ExecuteTask(UBehaviorTreeComponent
 	if (!bFoundFleeLocation)
 	{
 		// fallback around the player in case the point far away is outside the navmesh
-		for (int Attempt = 0; Attempt < 12; ++Attempt)
+		for (int Attempt = 0; Attempt < 10; ++Attempt)
 		{
 			FNavLocation CandidateLocation;
 
-			if (!NavSystem->GetRandomReachablePointInRadius(PawnLocation, 600.f, CandidateLocation))
+			if (!NavSystem->GetRandomReachablePointInRadius(PawnLocation, 650.f, CandidateLocation))
 			{
 				continue;
 			}
@@ -235,7 +263,17 @@ EBTNodeResult::Type UBTTask_FindFleeLocation::ExecuteTask(UBehaviorTreeComponent
 				continue;
 			}
 
-			const float Score = DistanceFromEnemy - TravelDistance * 0.20f;
+			float ClosestThreatDistance = DistanceFromEnemy;
+
+			for (const FVector& ThreatLocation : VisibleThreatLocations)
+			{
+				ClosestThreatDistance = FMath::Min(
+					ClosestThreatDistance,
+					FVector::Dist2D(CandidateLocation.Location, ThreatLocation)
+				);
+			}
+
+			const float Score = ClosestThreatDistance - TravelDistance * 0.15f;
 
 			if (Score > BestScore)
 			{
@@ -248,21 +286,54 @@ EBTNodeResult::Type UBTTask_FindFleeLocation::ExecuteTask(UBehaviorTreeComponent
 
 	if (!bFoundFleeLocation)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[FleeTask] failed: no reachable flee point"));
-		return EBTNodeResult::Failed;
+		// last try in the general escape direction, moving is better than standing still here
+		const FVector FallbackTarget = PawnLocation + FleeDirection * 450.f;
+		FNavLocation ProjectedFallback;
+
+		if (NavSystem->ProjectPointToNavigation(
+			FallbackTarget,
+			ProjectedFallback,
+			FVector(350.f, 350.f, 250.f)))
+		{
+			const float FallbackDistance =
+				FVector::Dist2D(PawnLocation, ProjectedFallback.Location);
+
+			if (FallbackDistance > 100.f)
+			{
+				Blackboard->SetValueAsVector(
+					SurvivorBB::MoveLocation,
+					ProjectedFallback.Location);
+
+				Controller->MoveToLocation(ProjectedFallback.Location, 100.f);
+
+				UE_LOG(LogTemp, Warning, TEXT("[FleeTask] using simple fallback point"));
+				return true;
+			}
+		}
+
+		UE_LOG(LogTemp, Warning, TEXT("[FleeTask] could not find a new flee point"));
+		return false;
 	}
 
 	Blackboard->SetValueAsVector(SurvivorBB::MoveLocation, BestFleeLocation.Location);
+	Controller->MoveToLocation(BestFleeLocation.Location, 100.f);
 
-	UE_LOG(
-		LogTemp,
-		Warning,
-		TEXT("[FleeTask] success | EnemyDistance %.0f -> %.0f | MoveDistance %.0f | MoveLocation=%s"),
-		CurrentDistanceFromEnemy,
-		FVector::Dist2D(BestFleeLocation.Location, EnemyLocation),
-		FVector::Dist2D(PawnLocation, BestFleeLocation.Location),
-		*BestFleeLocation.Location.ToString()
-	);
+	return true;
+}
 
-	return EBTNodeResult::Succeeded;
+void UBTTask_FindFleeLocation::StopRunning(UBehaviorTreeComponent& OwnerComp) const
+{
+	AAIController* Controller = OwnerComp.GetAIOwner();
+
+	if (!Controller)
+	{
+		return;
+	}
+
+	Controller->StopMovement();
+
+	if (ASurvivorPawn* Pawn = Cast<ASurvivorPawn>(Controller->GetPawn()))
+	{
+		Pawn->StopRunning();
+	}
 }

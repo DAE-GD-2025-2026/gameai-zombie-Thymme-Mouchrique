@@ -182,7 +182,7 @@ EBTNodeResult::Type UBTTask_AttackTargetEnemy::ExecuteTask(UBehaviorTreeComponen
 	// stop behavior tree from firing weapon every time task gets executed
 	if (CurrentTime - LastAttackTime < BestWeaponCooldown)
 	{
-		return EBTNodeResult::Failed;
+		return EBTNodeResult::Succeeded;
 	}
 
 	ABaseItem* Weapon = Items[BestWeaponSlot];
