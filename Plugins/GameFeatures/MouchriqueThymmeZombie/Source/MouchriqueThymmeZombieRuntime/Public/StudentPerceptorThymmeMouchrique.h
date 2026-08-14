@@ -45,6 +45,9 @@ public:
 	// purge task uses remembered position instead of reading hidden actor position
 	bool GetLastKnownPurgeLocation(FVector& OutLocation) const;
 
+	// true if location is still too close to somewhere we just fled from
+	bool IsInRecentDangerZone(const FVector& Location) const;
+
 private:
 	UPROPERTY()
 	TArray<TObjectPtr<AActor>> KnownHouses;
@@ -68,6 +71,11 @@ private:
 	FVector LastKnownPurgeLocation = FVector::ZeroVector;
 	float LastPurgeSeenTime = -1000.f;
 	bool bHasKnownPurgeLocation = false;
+
+	// where we last forgot about a threat, so explore does not walk straight back into it
+	FVector LastDangerLocation = FVector::ZeroVector;
+	float LastDangerTime = -1000.f;
+	bool bHasDangerLocation = false;
 
 	bool bDidInitialScan = false;
 	float InitialScanTimer = 0.f;

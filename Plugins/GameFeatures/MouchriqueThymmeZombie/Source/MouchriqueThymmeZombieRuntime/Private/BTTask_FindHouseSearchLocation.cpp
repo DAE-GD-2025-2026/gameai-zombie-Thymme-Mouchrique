@@ -2,9 +2,10 @@
 
 #include "AIController.h"
 #include "BehaviorTree/BlackboardComponent.h"
-#include "DrawDebugHelpers.h"
 #include "GameFramework/Pawn.h"
 #include "NavigationSystem.h"
+
+#include "SurvivorAIShared.h"
 
 UBTTask_FindHouseSearchLocation::UBTTask_FindHouseSearchLocation()
 {
@@ -22,7 +23,7 @@ EBTNodeResult::Type UBTTask_FindHouseSearchLocation::ExecuteTask(UBehaviorTreeCo
 	}
 
 	APawn* Pawn = Controller->GetPawn();
-	AActor* House = Cast<AActor>(Blackboard->GetValueAsObject(TEXT("TargetHouse")));
+	AActor* House = Cast<AActor>(Blackboard->GetValueAsObject(SurvivorBB::TargetHouse));
 
 	if (!Pawn || !House)
 	{
@@ -36,33 +37,43 @@ EBTNodeResult::Type UBTTask_FindHouseSearchLocation::ExecuteTask(UBehaviorTreeCo
 		return EBTNodeResult::Failed;
 	}
 
-	FNavLocation SearchLocation;
+	static const FVector2D SearchOffsets[] =
+	{
+		FVector2D(0.f, 0.f),
+		FVector2D(200.f, 0.f),
+		FVector2D(0.f, 200.f),
+		FVector2D(-200.f, 0.f),
+		FVector2D(0.f, -200.f)
+	};
 
-	// find a random location around the house to search for the player
-	const bool bFoundLocation = NavSystem->GetRandomReachablePointInRadius(
-		House->GetActorLocation(),
-		300.f,
-		SearchLocation
-	);
+	int SearchIndex = Blackboard->GetValueAsInt(TEXT("HouseSearchCount"));
 
-	if (!bFoundLocation)
+	if (SearchIndex >= UE_ARRAY_COUNT(SearchOffsets))
 	{
 		return EBTNodeResult::Failed;
 	}
 
-	Blackboard->SetValueAsVector(TEXT("MoveLocation"), SearchLocation.Location);
-
-	// rotate towards house
-	FVector DirectionToHouse = House->GetActorLocation() - Pawn->GetActorLocation();
-	DirectionToHouse.Z = 0.f;
-
-	if (!DirectionToHouse.IsNearlyZero())
+	// find a random location around the house to search for the player
+	// use fixed spots now so we actually search different parts around the house
+	for (int Attempt = 0; Attempt < UE_ARRAY_COUNT(SearchOffsets); ++Attempt)
 	{
-		Pawn->SetActorRotation(DirectionToHouse.Rotation());
+		const int Index = (SearchIndex + Attempt) % UE_ARRAY_COUNT(SearchOffsets);
+		const FVector2D Offset = SearchOffsets[Index];
+
+		const FVector DesiredLocation = House->GetActorLocation() + FVector(Offset.X, Offset.Y, 0.f);
+
+		FNavLocation SearchLocation;
+
+		if (!NavSystem->ProjectPointToNavigation(DesiredLocation, SearchLocation))
+		{
+			continue;
+		}
+
+		Blackboard->SetValueAsVector(SurvivorBB::MoveLocation, SearchLocation.Location);
+		Blackboard->SetValueAsInt(TEXT("HouseSearchCount"), Index + 1);
+
+		return EBTNodeResult::Succeeded;
 	}
 
-	DrawDebugLine(Pawn->GetWorld(), Pawn->GetActorLocation(), SearchLocation.Location, FColor::Yellow, false, 2.f, 0, 4.f);
-	DrawDebugSphere(Pawn->GetWorld(), SearchLocation.Location, 100.f, 12, FColor::Yellow, false, 2.f);
-
-	return EBTNodeResult::Succeeded;
+	return EBTNodeResult::Failed;
 }

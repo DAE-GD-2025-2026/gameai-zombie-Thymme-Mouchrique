@@ -103,17 +103,9 @@ namespace
 		if (bIsRunner)
 		{
 			// Runner is faster than the player
-			// Best answer: hide in a house if we know one
 			if (!bHasWeapon || bLowHealth)
 			{
-				if (bHasTargetHouse)
-				{
-					bShouldFleeToHouse = true;
-				}
-				else
-				{
-					bShouldFleeEnemy = true;
-				}
+				bShouldFleeEnemy = true;
 			}
 			else
 			{
@@ -391,7 +383,7 @@ void UStudentPerceptor::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 		}
 	}
 
-	// forget enemy after a few seconds if it is not visible anymore
+	// forget enemy after we have not seen it for a while and actually got away from it
 	if (Blackboard)
 	{
 		AActor* TargetEnemy = Cast<AActor>(Blackboard->GetValueAsObject(SurvivorBB::TargetEnemy));
@@ -400,17 +392,29 @@ void UStudentPerceptor::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 		{
 			const TWeakObjectPtr<AActor> EnemyKey(TargetEnemy);
 			const float* LastSeenTime = LastEnemySeenTimes.Find(EnemyKey);
+			const FVector* LastKnownLocation = LastKnownEnemyLocations.Find(EnemyKey);
 
-			if (LastSeenTime && CurrentTime - *LastSeenTime > 4.f)
+			if (LastSeenTime && LastKnownLocation)
 			{
-				Blackboard->ClearValue(SurvivorBB::TargetEnemy);
-				Blackboard->SetValueAsBool(SurvivorBB::ShouldAttackEnemy, false);
-				Blackboard->SetValueAsBool(SurvivorBB::ShouldFleeEnemy, false);
-				Blackboard->SetValueAsBool(SurvivorBB::ShouldFleeToHouse, false);
+				const float TimeSinceSeen = CurrentTime - *LastSeenTime;
+				const float DistanceFromEnemy = FVector::Dist2D(OwnerPawn->GetActorLocation(), *LastKnownLocation);
 
-				LastKnownEnemyLocations.Remove(EnemyKey);
-				LastEnemySeenTimes.Remove(EnemyKey);
-				VisibleEnemies.Remove(EnemyKey);
+				if (TimeSinceSeen > 4.f && DistanceFromEnemy > 1200.f)
+				{
+					// remember roughly where we just escaped from so we don't explore straight back into it
+					LastDangerLocation = *LastKnownLocation;
+					LastDangerTime = CurrentTime;
+					bHasDangerLocation = true;
+
+					Blackboard->ClearValue(SurvivorBB::TargetEnemy);
+					Blackboard->SetValueAsBool(SurvivorBB::ShouldAttackEnemy, false);
+					Blackboard->SetValueAsBool(SurvivorBB::ShouldFleeEnemy, false);
+					Blackboard->SetValueAsBool(SurvivorBB::ShouldFleeToHouse, false);
+
+					LastKnownEnemyLocations.Remove(EnemyKey);
+					LastEnemySeenTimes.Remove(EnemyKey);
+					VisibleEnemies.Remove(EnemyKey);
+				}
 			}
 		}
 	}
@@ -430,32 +434,42 @@ void UStudentPerceptor::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 		{
 			if (SelfHealth && SelfHealth->GetMaxHealth() > 0)
 			{
-				const float HealthRatio =
-					static_cast<float>(SelfHealth->GetHealth()) /
-					static_cast<float>(SelfHealth->GetMaxHealth());
+				const float HealthRatio = static_cast<float>(SelfHealth->GetHealth()) 
+					/ static_cast<float>(SelfHealth->GetMaxHealth());
 
-				Blackboard->SetValueAsBool(
-					SurvivorBB::IsLowHealth,
-					HealthRatio <= 0.35f
-				);
+				Blackboard->SetValueAsBool(SurvivorBB::IsLowHealth, HealthRatio <= 0.35f);
 			}
 
 			if (Stamina && Stamina->GetMaxStamina() > 0.f)
 			{
-				const float StaminaRatio =
-					Stamina->GetCurrentStamina() /
-					Stamina->GetMaxStamina();
-
-				Blackboard->SetValueAsBool(
-					SurvivorBB::IsLowEnergy,
-					StaminaRatio <= 0.30f
-				);
+				const float StaminaRatio = Stamina->GetCurrentStamina() / Stamina->GetMaxStamina();
+				Blackboard->SetValueAsBool(SurvivorBB::IsLowEnergy, StaminaRatio <= 0.30f);
 			}
 
-			Blackboard->SetValueAsBool(
-				SurvivorBB::HasWeapon,
-				InventoryHasUsableWeapon(Inventory)
-			);
+			Blackboard->SetValueAsBool(SurvivorBB::HasWeapon, InventoryHasUsableWeapon(Inventory));
+
+			// update enemy decision too because ammo can change without a new perception event
+			AActor* TargetEnemy = Cast<AActor>(Blackboard->GetValueAsObject(SurvivorBB::TargetEnemy));
+
+			if (TargetEnemy && IsEnemyCurrentlyVisible(TargetEnemy))
+			{
+				FVector EnemyLocation;
+
+				if (GetLastKnownEnemyLocation(TargetEnemy, EnemyLocation))
+				{
+					const float EnemyDistance = FVector::Dist2D(OwnerPawn->GetActorLocation(), EnemyLocation);
+					UpdateCombatDecision(Blackboard, ClassifyZombie(TargetEnemy), EnemyDistance, Inventory);
+
+					UE_LOG(LogTemp, Warning, TEXT("[SelfState] HasWeapon=%s | TargetEnemy=%s"),
+						InventoryHasUsableWeapon(Inventory) ? TEXT("true") : TEXT("false"),
+						*GetNameSafe(TargetEnemy));
+
+					UE_LOG(LogTemp, Warning, TEXT("[SelfStateDecision] Attack=%s | Flee=%s | FleeToHouse=%s"),
+						Blackboard->GetValueAsBool(SurvivorBB::ShouldAttackEnemy) ? TEXT("true") : TEXT("false"),
+						Blackboard->GetValueAsBool(SurvivorBB::ShouldFleeEnemy) ? TEXT("true") : TEXT("false"),
+						Blackboard->GetValueAsBool(SurvivorBB::ShouldFleeToHouse) ? TEXT("true") : TEXT("false"));
+				}
+			}
 		}
 	}
 
@@ -470,7 +484,10 @@ void UStudentPerceptor::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 	// do a 360 scan on spawn to find houses on spawn
 	if (!bDidInitialScan)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[STUDENTPERCEPTOR] initiating spawn scan."));
+		if (InitialScanTimer <= 0.f)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("[STUDENTPERCEPTOR] initiating spawn scan."));
+		}
 
 		InitialScanTimer += DeltaTime;
 
@@ -506,19 +523,21 @@ void UStudentPerceptor::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 
 	if (bTookDamage && CurrentTime - LastDamageReactionTime > 0.75f)
 	{
-		const bool bAlreadyHasEnemy =
-			Blackboard &&
-			Blackboard->GetValueAsObject(SurvivorBB::TargetEnemy) != nullptr;
+		AActor* TargetEnemy = Blackboard
+			? Cast<AActor>(Blackboard->GetValueAsObject(SurvivorBB::TargetEnemy))
+			: nullptr;
 
-		if (!bAlreadyHasEnemy)
+		const bool bCanSeeTargetEnemy = TargetEnemy && IsEnemyCurrentlyVisible(TargetEnemy);
+
+		if (!bCanSeeTargetEnemy)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("[STUDENTPERCEPTOR] Health dropped. No enemy known, turning around to scan."));
+			UE_LOG(LogTemp, Warning, TEXT("[STUDENTPERCEPTOR] Health dropped. No visible enemy, turning around to scan."));
 
 			OwnerPawn->AddActorWorldRotation(FRotator(0.f, 180.f, 0.f));
 		}
 		else
 		{
-			UE_LOG(LogTemp, Warning, TEXT("[STUDENTPERCEPTOR] Health dropped, but enemy already known. Not turning around."));
+			UE_LOG(LogTemp, Warning, TEXT("[STUDENTPERCEPTOR] Health dropped, but target enemy is visible. Not turning around."));
 		}
 
 		LastDamageReactionTime = CurrentTime;
@@ -710,7 +729,7 @@ bool UStudentPerceptor::GetVillageCircleExploreLocation(FVector& OutLocation)
 		FVector(ProjectionExtent, ProjectionExtent, ProjectionExtent)
 	);
 
-	if (!bProjected)
+	if (!bProjected || IsInRecentDangerZone(ProjectedLocation.Location))
 	{
 		++VillageExploreIndex;
 		return false;
@@ -795,6 +814,33 @@ bool UStudentPerceptor::GetLastKnownPurgeLocation(FVector& OutLocation) const
 	OutLocation = LastKnownPurgeLocation;
 	return true;
 }
+
+bool UStudentPerceptor::IsInRecentDangerZone(const FVector& Location) const
+{
+	if (!bHasDangerLocation)
+	{
+		return false;
+	}
+
+	const UWorld* World = GetWorld();
+
+	if (!World)
+	{
+		return false;
+	}
+
+	// put a cooldown on it so that we don't avoid this place forever	
+	constexpr float DangerCooldown = 10.f;
+	constexpr float DangerRadius = 1500.f;
+
+	if (World->GetTimeSeconds() - LastDangerTime > DangerCooldown)
+	{
+		return false;
+	}
+
+	return FVector::Dist2D(Location, LastDangerLocation) < DangerRadius;
+}
+
 
 void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 {

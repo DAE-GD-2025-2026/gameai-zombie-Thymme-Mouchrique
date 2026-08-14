@@ -2,9 +2,11 @@
 
 #include "AIController.h"
 #include "BehaviorTree/BlackboardComponent.h"
-#include "DrawDebugHelpers.h"
 #include "GameFramework/Pawn.h"
 #include "NavigationSystem.h"
+
+#include "StudentPerceptorThymmeMouchrique.h"
+#include "SurvivorAIShared.h"
 
 UBTTask_FindEscapePurgeLocation::UBTTask_FindEscapePurgeLocation()
 {
@@ -22,15 +24,28 @@ EBTNodeResult::Type UBTTask_FindEscapePurgeLocation::ExecuteTask(UBehaviorTreeCo
 	}
 
 	APawn* Pawn = Controller->GetPawn();
-	AActor* PurgeZone = Cast<AActor>(Blackboard->GetValueAsObject(TEXT("TargetPurgeZone")));
 
-	if (!Pawn || !PurgeZone)
+	if (!Pawn)
+	{
+		return EBTNodeResult::Failed;
+	}
+
+	UStudentPerceptor* Perceptor = Pawn->FindComponentByClass<UStudentPerceptor>();
+
+	if (!Perceptor)
+	{
+		return EBTNodeResult::Failed;
+	}
+
+	FVector PurgeLocation;
+
+	// use last purge location we actually perceived instead of tracking purge actor
+	if (!Perceptor->GetLastKnownPurgeLocation(PurgeLocation))
 	{
 		return EBTNodeResult::Failed;
 	}
 
 	const FVector PawnLocation = Pawn->GetActorLocation();
-	const FVector PurgeLocation = PurgeZone->GetActorLocation();
 
 	FVector DirectionAway = PawnLocation - PurgeLocation;
 	DirectionAway.Z = 0.f;
@@ -55,28 +70,43 @@ EBTNodeResult::Type UBTTask_FindEscapePurgeLocation::ExecuteTask(UBehaviorTreeCo
 		return EBTNodeResult::Failed;
 	}
 
-	constexpr float EscapeDistance = 700.f;
-	constexpr float SearchRadius = 300.f;
+	constexpr float EscapeDistance = 900.f;
+	constexpr float SearchRadius = 450.f;
 
 	const FVector DesiredLocation = PawnLocation + DirectionAway * EscapeDistance;
 
-	FNavLocation EscapeLocation;
+	FNavLocation BestLocation;
+	float BestScore = TNumericLimits<float>::Lowest();
+	bool bFoundLocation = false;
 
-	const bool bFoundLocation = NavSystem->GetRandomReachablePointInRadius(
-		DesiredLocation,
-		SearchRadius,
-		EscapeLocation
-	);
+	// try a few spots and take the one that gets us further away
+	for (int Attempt = 0; Attempt < 10; ++Attempt)
+	{
+		FNavLocation CandidateLocation;
+
+		if (!NavSystem->GetRandomReachablePointInRadius(DesiredLocation, SearchRadius, CandidateLocation))
+		{
+			continue;
+		}
+
+		const float DistanceFromPurge = FVector::Dist2D(CandidateLocation.Location, PurgeLocation);
+		const float TravelDistance = FVector::Dist2D(PawnLocation, CandidateLocation.Location);
+		const float Score = DistanceFromPurge - TravelDistance * 0.25f;
+
+		if (Score > BestScore)
+		{
+			BestScore = Score;
+			BestLocation = CandidateLocation;
+			bFoundLocation = true;
+		}
+	}
 
 	if (!bFoundLocation)
 	{
 		return EBTNodeResult::Failed;
 	}
 
-	Blackboard->SetValueAsVector(TEXT("MoveLocation"), EscapeLocation.Location);
-
-	DrawDebugLine(Pawn->GetWorld(), PawnLocation, EscapeLocation.Location, FColor::Red, false, 2.f, 0, 5.f);
-	DrawDebugSphere(Pawn->GetWorld(), EscapeLocation.Location, 120.f, 12, FColor::Red, false, 2.f);
+	Blackboard->SetValueAsVector(SurvivorBB::MoveLocation, BestLocation.Location);
 
 	return EBTNodeResult::Succeeded;
 }

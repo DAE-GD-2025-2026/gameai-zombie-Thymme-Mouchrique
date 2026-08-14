@@ -4,94 +4,19 @@
 #include "BehaviorTree/BlackboardComponent.h"
 #include "GameFramework/Pawn.h"
 
-#include "Common/HealthComponent.h"
 #include "Common/InventoryComponent.h"
 #include "Items/BaseItem.h"
+#include "Items/ItemType.h"
 
-
-// helper functions
-namespace
-{
-	bool IsPistol(const FString& ItemName)
-	{
-		return ItemName.Contains(TEXT("Pistol"));
-	}
-
-	bool IsShotgun(const FString& ItemName)
-	{
-		return ItemName.Contains(TEXT("Shotgun"));
-	}
-
-	bool IsUsableWeapon(const ABaseItem* Item)
-	{
-		if (!Item)
-		{
-			return false;
-		}
-
-		const FString ItemName = Item->GetName();
-
-		return (IsPistol(ItemName) || IsShotgun(ItemName)) &&
-			Item->GetValue() > 0;
-	}
-
-	bool TryUseWeapon(UInventoryComponent* Inventory,const TArray<ABaseItem*>& Items,
-		const FString& WantedWeaponName,UBlackboardComponent* Blackboard)
-	{
-		if (!Inventory)
-		{
-			return false;
-		}
-
-		for (int SlotIdx = 0; SlotIdx < Items.Num(); ++SlotIdx)
-		{
-			ABaseItem* Item = Items[SlotIdx];
-
-			if (!IsUsableWeapon(Item))
-			{
-				continue;
-			}
-
-			const FString ItemName = Item->GetName();
-
-			if (!ItemName.Contains(WantedWeaponName))
-			{
-				continue;
-			}
-
-			if (Inventory->UseItem(SlotIdx))
-			{
-				UE_LOG(LogTemp, Warning, TEXT("Attacked enemy using: %s"), *ItemName);
-
-				if (Item->GetValue() <= 0)
-				{
-					Inventory->RemoveItem(SlotIdx);
-				}
-
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	bool HasAnyUsableWeapon(const TArray<ABaseItem*>& Items)
-	{
-		for (const ABaseItem* Item : Items)
-		{
-			if (IsUsableWeapon(Item))
-			{
-				return true;
-			}
-		}
-
-		return false;
-	}
-}
+#include "StudentPerceptorThymmeMouchrique.h"
+#include "SurvivorAIShared.h"
 
 UBTTask_AttackTargetEnemy::UBTTask_AttackTargetEnemy()
 {
 	NodeName = TEXT("Attack Target Enemy");
+
+	// task stores last attack time so each AI needs its own copy
+	bCreateNodeInstance = true;
 }
 
 EBTNodeResult::Type UBTTask_AttackTargetEnemy::ExecuteTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory)
@@ -105,34 +30,58 @@ EBTNodeResult::Type UBTTask_AttackTargetEnemy::ExecuteTask(UBehaviorTreeComponen
 	}
 
 	APawn* Pawn = Controller->GetPawn();
-	AActor* Enemy = Cast<AActor>(Blackboard->GetValueAsObject(TEXT("TargetEnemy")));
 
-	if (!Pawn || !Enemy)
+	if (!Pawn)
+	{
+		return EBTNodeResult::Failed;
+	}
+
+	// only attack if combat decision actually says to attack
+	if (!Blackboard->GetValueAsBool(SurvivorBB::ShouldAttackEnemy))
+	{
+		return EBTNodeResult::Failed;
+	}
+
+	AActor* Enemy = Cast<AActor>(
+		Blackboard->GetValueAsObject(
+			SurvivorBB::TargetEnemy
+		)
+	);
+
+	if (!Enemy)
 	{
 		return EBTNodeResult::Failed;
 	}
 
 	UInventoryComponent* Inventory = Pawn->FindComponentByClass<UInventoryComponent>();
+	UStudentPerceptor* Perceptor = Pawn->FindComponentByClass<UStudentPerceptor>();
 
-	if (!Inventory)
+	if (!Inventory || !Perceptor)
 	{
 		return EBTNodeResult::Failed;
 	}
 
-	FVector DirectionToEnemy = Enemy->GetActorLocation() - Pawn->GetActorLocation();
+	// do not attack enemy if it is only remembered and not actually visible
+	if (!Perceptor->IsEnemyCurrentlyVisible(Enemy))
+	{
+		return EBTNodeResult::Failed;
+	}
+
+	FVector EnemyLocation;
+
+	// use position stored by perception instead of reading enemy actor position directly
+	if (!Perceptor->GetLastKnownEnemyLocation(Enemy, EnemyLocation))
+	{
+		return EBTNodeResult::Failed;
+	}
+
+	FVector DirectionToEnemy = EnemyLocation - Pawn->GetActorLocation();
 	DirectionToEnemy.Z = 0.f;
 
-	// reset target if we lose sight or get too far from the enemy or if dead
 	const float DistanceToEnemy = DirectionToEnemy.Size();
-	constexpr float MaxEnemyMemoryDistance = 1800.f;
 
-	UHealthComponent* EnemyHealth = Enemy->FindComponentByClass<UHealthComponent>();
-
-	if (DirectionToEnemy.IsNearlyZero() ||
-		DistanceToEnemy > MaxEnemyMemoryDistance ||
-		(EnemyHealth && EnemyHealth->IsDead()))
+	if (DirectionToEnemy.IsNearlyZero())
 	{
-		Blackboard->ClearValue(TEXT("TargetEnemy"));
 		return EBTNodeResult::Failed;
 	}
 
@@ -143,49 +92,125 @@ EBTNodeResult::Type UBTTask_AttackTargetEnemy::ExecuteTask(UBehaviorTreeComponen
 
 	const TArray<ABaseItem*>& Items = Inventory->GetInventory();
 
-	if (!HasAnyUsableWeapon(Items))
+	// INDEX_NONE is a unreal defined constant for -1, used to indicate no valid index (I find this pretty cool)
+	int BestWeaponSlot = INDEX_NONE;
+	float BestWeaponScore = TNumericLimits<float>::Lowest();
+	float BestWeaponCooldown = 0.35f;
+
+	const EKnownZombieType EnemyType = ClassifyZombie(Enemy);
+
+	// score all usable weapons instead of only checking distance
+	for (int SlotIdx = 0; SlotIdx < Items.Num(); ++SlotIdx)
 	{
+		ABaseItem* Item = Items[SlotIdx];
 
-		// fix for firing but not having ammo left to fire again (led to player being stuck)
+		if (!IsUsableWeaponItem(Item))
+		{
+			continue;
+		}
 
-		Blackboard->SetValueAsBool(TEXT("HasWeapon"), false);
-		Blackboard->SetValueAsBool(TEXT("ShouldAttackEnemy"), false);
-		Blackboard->SetValueAsBool(TEXT("ShouldFleeEnemy"), true);
+		float Score = static_cast<float>(Item->GetValue());
+		float Cooldown = 0.35f;
 
-		UE_LOG(LogTemp, Warning, TEXT("No usable weapon left. Switching to flee enemy."));
+		if (Item->GetItemType() == EItemType::Shotgun)
+		{
+			// shotgun is better close up
+			if (DistanceToEnemy < 450.f)
+			{
+				Score += 40.f;
+			}
+			else
+			{
+				Score -= 20.f;
+			}
 
+			// runner getting close is dangerous so shotgun gets bonus
+			if (EnemyType == EKnownZombieType::Runner)
+			{
+				Score += 15.f;
+			}
+
+			// heavy takes a lot of ammo so shotgun is less attractive
+			if (EnemyType == EKnownZombieType::Heavy)
+			{
+				Score -= 10.f;
+			}
+
+			Cooldown = 0.60f;
+		}
+		else if (Item->GetItemType() == EItemType::Pistol)
+		{
+			// pistol is better when enemy is not right on top of player
+			if (DistanceToEnemy >= 350.f)
+			{
+				Score += 25.f;
+			}
+			else
+			{
+				Score += 5.f;
+			}
+
+			// pistol saves shotgun ammo when fighting heavy
+			if (EnemyType == EKnownZombieType::Heavy)
+			{
+				Score += 5.f;
+			}
+		}
+
+		// avoid wasting the last shot if another weapon is available
+		if (Item->GetValue() <= 1)
+		{
+			Score -= 15.f;
+		}
+
+		if (Score > BestWeaponScore)
+		{
+			BestWeaponScore = Score;
+			BestWeaponSlot = SlotIdx;
+			BestWeaponCooldown = Cooldown;
+		}
+	}
+
+	// no weapon with ammo found
+	if (BestWeaponSlot == INDEX_NONE)
+	{
 		return EBTNodeResult::Failed;
 	}
 
-	constexpr float ShotgunPreferredDistance = 450.f;
+	const float CurrentTime = Pawn->GetWorld()->GetTimeSeconds();
 
-	if (DistanceToEnemy <= ShotgunPreferredDistance)
+	// stop behavior tree from firing weapon every time task gets executed
+	if (CurrentTime - LastAttackTime < BestWeaponCooldown)
 	{
-		// if enemy is close use shotgun first because spread is useful up close.
-		if (TryUseWeapon(Inventory, Items, TEXT("Shotgun"), Blackboard))
-		{
-			return EBTNodeResult::Succeeded;
-		}
-
-		if (TryUseWeapon(Inventory, Items, TEXT("Pistol"), Blackboard))
-		{
-			return EBTNodeResult::Succeeded;
-		}
-	}
-	else
-	{
-		// if enemy is farther away use pistol first because it is more accurate.
-		if (TryUseWeapon(Inventory, Items, TEXT("Pistol"), Blackboard))
-		{
-			return EBTNodeResult::Succeeded;
-		}
-
-		if (TryUseWeapon(Inventory, Items, TEXT("Shotgun"), Blackboard))
-		{
-			return EBTNodeResult::Succeeded;
-		}
+		return EBTNodeResult::Failed;
 	}
 
-	Blackboard->SetValueAsBool(TEXT("HasWeapon"), false);
-	return EBTNodeResult::Failed;
+	ABaseItem* Weapon = Items[BestWeaponSlot];
+
+	if (!Weapon)
+	{
+		return EBTNodeResult::Failed;
+	}
+
+	if (!Inventory->UseItem(BestWeaponSlot))
+	{
+		return EBTNodeResult::Failed;
+	}
+
+	LastAttackTime = CurrentTime;
+
+	UE_LOG(
+		LogTemp,
+		Warning,
+		TEXT("Attacked enemy using: %s"),
+		*Weapon->GetName()
+	);
+
+	// remove empty weapon after last shot
+	if (Weapon->GetValue() <= 0)
+	{
+		Inventory->RemoveItem(BestWeaponSlot);
+	}
+
+	return EBTNodeResult::Succeeded;
 }

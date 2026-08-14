@@ -2,9 +2,10 @@
 
 #include "AIController.h"
 #include "BehaviorTree/BlackboardComponent.h"
-#include "NavigationSystem.h"
 #include "GameFramework/Pawn.h"
+#include "NavigationSystem.h"
 #include "DrawDebugHelpers.h"
+
 #include "StudentPerceptorThymmeMouchrique.h"
 
 UBTTask_FindRandomLocation::UBTTask_FindRandomLocation()
@@ -29,41 +30,48 @@ EBTNodeResult::Type UBTTask_FindRandomLocation::ExecuteTask(UBehaviorTreeCompone
 		return EBTNodeResult::Failed;
 	}
 
-	// FIRST: if we know any unsearched house, don't explore randomly
-	// Force the BT to use the Search House branch instead
-	if (UStudentPerceptor* StudentPerceptor = Pawn->FindComponentByClass<UStudentPerceptor>())
+	UStudentPerceptor* StudentPerceptor = Pawn->FindComponentByClass<UStudentPerceptor>();
+
+	if (!StudentPerceptor)
 	{
-		if (StudentPerceptor->TryUpdateTargetHouse())
-		{
-			UE_LOG(LogTemp, Warning, TEXT("[Explore] Known unsearched house found. Cancelling random explore."));
-			return EBTNodeResult::Failed;
-		}
+		return EBTNodeResult::Failed;
+	}
 
-		const int VillageExploreCount = Blackboard->GetValueAsInt(TEXT("VillageExploreCount"));
-		constexpr int MaxVillageExploreCount = 8;
+	FVector VillageExploreLocation;
 
-		// max village count to prevent player endlessly searching 
-		if (VillageExploreCount < MaxVillageExploreCount)
-		{
-			FVector VillageExploreLocation;
+	if (StudentPerceptor->GetVillageCircleExploreLocation(VillageExploreLocation))
+	{
+		Blackboard->SetValueAsVector(TEXT("MoveLocation"), VillageExploreLocation);
+		Blackboard->SetValueAsVector(TEXT("LastExploreLocation"), VillageExploreLocation);
 
-			if (StudentPerceptor->GetVillageCircleExploreLocation(VillageExploreLocation))
-			{
-				Blackboard->SetValueAsVector(TEXT("MoveLocation"), VillageExploreLocation);
-				Blackboard->SetValueAsVector(TEXT("LastExploreLocation"), VillageExploreLocation);
+		UE_LOG(
+			LogTemp,
+			Warning,
+			TEXT("[Explore] Circle exploring around last known village.")
+		);
 
-				UE_LOG(LogTemp, Warning, TEXT("[Explore] Circle exploring around last known village."));
+		DrawDebugSphere(
+			Pawn->GetWorld(),
+			VillageExploreLocation,
+			80.f,
+			12,
+			FColor::Green,
+			false,
+			1.f
+		);
 
-				DrawDebugSphere(Pawn->GetWorld(), VillageExploreLocation, 80.f, 12, FColor::Green, false, 1.f);
-				DrawDebugLine(Pawn->GetWorld(), Pawn->GetActorLocation(), VillageExploreLocation, FColor::Green, false, 1.f, 0, 3.f);
+		DrawDebugLine(
+			Pawn->GetWorld(),
+			Pawn->GetActorLocation(),
+			VillageExploreLocation,
+			FColor::Green,
+			false,
+			1.f,
+			0,
+			3.f
+		);
 
-				return EBTNodeResult::Succeeded;
-			}
-		}
-		else
-		{
-			UE_LOG(LogTemp, Warning, TEXT("[Explore] Village fully checked. Searching new area."));
-		}
+		return EBTNodeResult::Succeeded;
 	}
 
 	UNavigationSystemV1* NavSystem = UNavigationSystemV1::GetCurrent(Pawn->GetWorld());
@@ -75,40 +83,35 @@ EBTNodeResult::Type UBTTask_FindRandomLocation::ExecuteTask(UBehaviorTreeCompone
 
 	const FVector PawnLocation = Pawn->GetActorLocation();
 	const FVector LastExploreLocation = Blackboard->GetValueAsVector(TEXT("LastExploreLocation"));
-
 	FVector ExploreDirection = Blackboard->GetValueAsVector(TEXT("ExploreDirection"));
-	ExploreDirection.Z = 0.f;
 
-	// If we do not have a direction yet, pick one.
+	// if there is no exploration direction yet, use where player is facing
 	if (ExploreDirection.IsNearlyZero())
 	{
-		ExploreDirection = FMath::VRand();
+		ExploreDirection = Pawn->GetActorForwardVector();
 		ExploreDirection.Z = 0.f;
-		ExploreDirection.Normalize();
 
-		Blackboard->SetValueAsVector(TEXT("ExploreDirection"), ExploreDirection);
+		if (ExploreDirection.IsNearlyZero())
+		{
+			ExploreDirection = FVector::ForwardVector;
+		}
+
+		ExploreDirection.Normalize();
 	}
 
-	constexpr float ExploreRadius = 1400.f;
-	constexpr float MinDistanceFromPawn = 700.f;
-	constexpr float MinDistanceFromLastExplore = 900.f;
-	constexpr int MaxAttempts = 20;
+	constexpr float ExploreRadius = 1500.f;
+	constexpr float MinimumDistanceFromLastTarget = 700.f;
 
 	FNavLocation BestLocation;
-	float BestScore = TNumericLimits<float>::Lowest(); // min float value coz starts at worst
-	bool bFoundGoodLocation = false;
+	float BestScore = TNumericLimits<float>::Lowest();
+	bool bFoundLocation = false;
 
-	for (int Attempt = 0; Attempt < MaxAttempts; ++Attempt)
+	// try multiple points instead of just taking first random one
+	for (int Attempt = 0; Attempt < 12; ++Attempt)
 	{
 		FNavLocation CandidateLocation;
 
-		const bool bFound = NavSystem->GetRandomReachablePointInRadius(
-			PawnLocation,
-			ExploreRadius,
-			CandidateLocation
-		);
-
-		if (!bFound)
+		if (!NavSystem->GetRandomReachablePointInRadius(PawnLocation, ExploreRadius, CandidateLocation))
 		{
 			continue;
 		}
@@ -116,76 +119,60 @@ EBTNodeResult::Type UBTTask_FindRandomLocation::ExecuteTask(UBehaviorTreeCompone
 		FVector DirectionToCandidate = CandidateLocation.Location - PawnLocation;
 		DirectionToCandidate.Z = 0.f;
 
+		const float DistanceToCandidate = DirectionToCandidate.Size2D();
+
 		if (DirectionToCandidate.IsNearlyZero())
 		{
 			continue;
 		}
 
-		const float DistanceFromPawn = DirectionToCandidate.Size();
 		DirectionToCandidate.Normalize();
 
-		const float DirectionAlignment = FVector::DotProduct(ExploreDirection, DirectionToCandidate);
+		// do not keep picking places behind us
+		const float ForwardAlignment = FVector::DotProduct(ExploreDirection, DirectionToCandidate);
 
-		// reject points clearly behind the current explore direction
-		if (DirectionAlignment < 0.15f)
+		if (ForwardAlignment < -0.25f)
 		{
 			continue;
 		}
-
-		const float DistanceFromLastExplore = FVector::Dist2D(LastExploreLocation, CandidateLocation.Location);
-
-		if (DistanceFromPawn < MinDistanceFromPawn)
-		{
-			continue;
-		}
-
-		if (!LastExploreLocation.IsNearlyZero() && DistanceFromLastExplore < MinDistanceFromLastExplore)
-		{
-			continue;
-		}
-
-		// Score prefers:
-		// - far enough movement
-		// - same general direction
-		// - not close to previous explore point
-		float CandidateScore = DistanceFromPawn;
-		CandidateScore += DirectionAlignment * 800.f;
 
 		if (!LastExploreLocation.IsNearlyZero())
 		{
-			CandidateScore += DistanceFromLastExplore * 0.25f;
+			const float DistanceFromLastTarget = FVector::Dist2D(CandidateLocation.Location, LastExploreLocation);
+
+			if (DistanceFromLastTarget < MinimumDistanceFromLastTarget)
+			{
+				continue;
+			}
 		}
 
-		if (CandidateScore > BestScore)
+		// prefer moving forward and actually making some distance
+		const float Score = ForwardAlignment * 1000.f + DistanceToCandidate * 0.25f;
+
+		if (Score > BestScore)
 		{
-			BestScore = CandidateScore;
+			BestScore = Score;
 			BestLocation = CandidateLocation;
-			bFoundGoodLocation = true;
+			bFoundLocation = true;
 		}
 	}
 
-	// if no point was found in that direction, pick a new explore direction next time
-	if (!bFoundGoodLocation)
+	if (!bFoundLocation)
 	{
-		Blackboard->ClearValue(TEXT("ExploreDirection"));
 		return EBTNodeResult::Failed;
 	}
 
-	// slowly update direction to match the successful movement
-	FVector NewDirection = BestLocation.Location - PawnLocation;
-	NewDirection.Z = 0.f;
+	FVector NewExploreDirection = BestLocation.Location - PawnLocation;
+	NewExploreDirection.Z = 0.f;
 
-	if (!NewDirection.IsNearlyZero())
+	if (!NewExploreDirection.IsNearlyZero())
 	{
-		NewDirection.Normalize();
-		Blackboard->SetValueAsVector(TEXT("ExploreDirection"), NewDirection);
+		NewExploreDirection.Normalize();
+		Blackboard->SetValueAsVector(TEXT("ExploreDirection"), NewExploreDirection);
 	}
 
 	Blackboard->SetValueAsVector(TEXT("MoveLocation"), BestLocation.Location);
 	Blackboard->SetValueAsVector(TEXT("LastExploreLocation"), BestLocation.Location);
-
-	DrawDebugSphere(Pawn->GetWorld(), BestLocation.Location, 80.f, 12, FColor::Blue, false, 1.f);
-	DrawDebugLine(Pawn->GetWorld(), PawnLocation, BestLocation.Location, FColor::Blue, false, 1.f, 0, 3.f);
 
 	return EBTNodeResult::Succeeded;
 }

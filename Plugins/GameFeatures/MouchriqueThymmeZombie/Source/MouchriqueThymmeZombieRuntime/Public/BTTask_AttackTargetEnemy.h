@@ -13,4 +13,8 @@ public:
 	UBTTask_AttackTargetEnemy();
 
 	virtual EBTNodeResult::Type ExecuteTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory) override;
+
+private:
+	// remember last shot so behavior tree does not waste ammo by firing too fast
+	float LastAttackTime = -1000.f;
 };
