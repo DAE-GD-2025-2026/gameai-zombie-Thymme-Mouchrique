@@ -372,13 +372,23 @@ void UStudentPerceptor::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 	const float CurrentTime = GetWorld()->GetTimeSeconds();
 
 	// forget purge after a few seconds instead of tracking actor forever
-	if (bHasKnownPurgeLocation && CurrentTime - LastPurgeSeenTime > 4.f)
+	if (bHasKnownPurgeLocation)
 	{
-		bHasKnownPurgeLocation = false;
+		const float DistanceToPurge = FVector::Dist2D(
+			OwnerPawn->GetActorLocation(),
+			LastKnownPurgeLocation);
 
-		if (Blackboard)
+		if (DistanceToPurge > 150.f || CurrentTime - LastPurgeSeenTime > 4.f)
 		{
-			Blackboard->ClearValue(SurvivorBB::TargetPurgeZone);
+			if (Blackboard)
+			{
+				Blackboard->ClearValue(SurvivorBB::TargetPurgeZone);
+			}
+
+			if (CurrentTime - LastPurgeSeenTime > 4.f)
+			{
+				bHasKnownPurgeLocation = false;
+			}
 		}
 	}
 
@@ -825,8 +835,29 @@ bool UStudentPerceptor::GetVillageCircleExploreLocation(FVector& OutLocation)
 	if (HasVillageCampingResources())
 	{
 		VillageExploreIndex = 0;
-		UE_LOG(LogTemp, Warning, TEXT("[VillageExplore] Still have village resources/guns, wandering another sweep."));
-		return GetVillageCircleExploreLocation(OutLocation);
+
+		FNavLocation FallbackLocation;
+
+		for (int Attempt = 0; Attempt < 6; ++Attempt)
+		{
+			if (!NavSystem->GetRandomReachablePointInRadius(LastVillageLocation,700.f,FallbackLocation))
+			{
+				continue;
+			}
+
+			if (IsInRecentDangerZone(FallbackLocation.Location))
+			{
+				continue;
+			}
+
+			OutLocation = FallbackLocation.Location;
+
+			UE_LOG(LogTemp, Warning, TEXT("[VillageExplore] Circle blocked, using local fallback."));
+			return true;
+		}
+
+		UE_LOG(LogTemp, Warning, TEXT("[VillageExplore] No safe local wander point found."));
+		return false;
 	}
 
 	bVillageSweepConfirmedEmpty = true;
@@ -951,7 +982,7 @@ bool UStudentPerceptor::IsInRecentDangerZone(const FVector& Location) const
 
 	// put a cooldown on it so that we don't avoid this place forever	
 	constexpr float DangerCooldown = 10.f;
-	constexpr float DangerRadius = 1500.f;
+	constexpr float DangerRadius = 800.f;
 
 	if (World->GetTimeSeconds() - LastDangerTime > DangerCooldown)
 	{
@@ -1040,17 +1071,24 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 	{
 		if (Stimulus.WasSuccessfullySensed())
 		{
-			// remember where perception actually saw purge instead of reading actor through walls
 			LastKnownPurgeLocation = Stimulus.StimulusLocation;
 			LastPurgeSeenTime = CurrentTime;
 			bHasKnownPurgeLocation = true;
 
-			UE_LOG(LogTemp, Warning, TEXT("SETTING TargetPurgeZone: %s"), *Actor->GetName());
-			Blackboard->SetValueAsObject(SurvivorBB::TargetPurgeZone, Actor);
+			const float DistanceToPurge = FVector::Dist2D(
+				OwnerPawn->GetActorLocation(),
+				LastKnownPurgeLocation
+			);
+
+			// purge is tiny, only panic if we are basically inside it
+			if (DistanceToPurge <= 100.f)
+			{
+				UE_LOG(LogTemp, Warning, TEXT("SETTING TargetPurgeZone: %s"), *Actor->GetName());
+				Blackboard->SetValueAsObject(SurvivorBB::TargetPurgeZone, Actor);
+			}
 		}
 		else
 		{
-			// keep purge memory for a few seconds because losing sight does not mean we are safe
 			UE_LOG(LogTemp, Warning, TEXT("LOST TargetPurgeZone, keeping memory: %s"), *Actor->GetName());
 		}
 
