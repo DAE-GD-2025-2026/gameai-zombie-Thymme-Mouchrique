@@ -1202,14 +1202,20 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 		if (Stimulus.WasSuccessfullySensed())
 		{
 			// house is static but still store location perception actually gave us
+			const bool bWasTravelling = Blackboard->GetValueAsBool(SurvivorBB::IsTravellingBetweenVillages);
+
 			LastVillageLocation = Stimulus.StimulusLocation;
 			bHasLastVillageLocation = true;
 			Blackboard->SetValueAsBool(SurvivorBB::IsTravellingBetweenVillages, false);
 
+			if (bWasTravelling)
+			{
+				ResetVillageExploreIndex();
+			}
+
 			if (!KnownHouses.Contains(Actor) && !SearchedHouses.Contains(Actor))
 			{
 				KnownHouses.Add(Actor);
-				ResetVillageExploreIndex();
 				UE_LOG(LogTemp, Warning, TEXT("Added known house: %s"), *Actor->GetName());
 			}
 
