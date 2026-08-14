@@ -525,7 +525,9 @@ void UStudentPerceptor::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 		{
 			const bool bAlreadyFleeing = Blackboard && Blackboard->GetValueAsBool(SurvivorBB::ShouldFleeEnemy);
 
-			if (!bAlreadyFleeing)
+			UInventoryComponent* Inventory = OwnerPawn->FindComponentByClass<UInventoryComponent>();
+
+			if (!bAlreadyFleeing && InventoryHasUsableWeapon(Inventory))
 			{
 				UE_LOG(LogTemp, Warning, TEXT("[STUDENTPERCEPTOR] Health dropped. No visible enemy, turning around to scan."));
 
@@ -1245,6 +1247,43 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 			{
 				KnownVillageWeapons.Add(Actor);
 				ResetVillageExploreIndex();
+			}
+		}
+
+		// if we find another medkit while hurt, use the one we already have first
+		ABaseItem* SeenItem = Cast<ABaseItem>(Actor);
+
+		if (SeenItem &&
+			SeenItem->GetItemType() == EItemType::Medkit &&
+			Health &&
+			Health->GetHealth() < Health->GetMaxHealth())
+		{
+			const TArray<ABaseItem*>& Items = Inventory->GetInventory();
+
+			for (int SlotIdx = 0; SlotIdx < Items.Num(); ++SlotIdx)
+			{
+				ABaseItem* InventoryItem = Items[SlotIdx];
+
+				if (!InventoryItem || InventoryItem->GetItemType() != EItemType::Medkit)
+				{
+					continue;
+				}
+
+				if (Inventory->UseItem(SlotIdx))
+				{
+					// same cleanup as the normal healing task
+					if (Items.IsValidIndex(SlotIdx) && Items[SlotIdx] && Items[SlotIdx]->GetValue() <= 0)
+					{
+						Inventory->RemoveItem(SlotIdx);
+					}
+
+					UE_LOG(LogTemp, Warning, TEXT("Used carried medkit to make room for: %s"), *Actor->GetName());
+
+					// pick it up
+					Blackboard->SetValueAsObject(SurvivorBB::TargetItem, Actor);
+				}
+
+				break;
 			}
 		}
 
