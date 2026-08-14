@@ -533,6 +533,7 @@ void UStudentPerceptor::TickComponent(float DeltaTime, ELevelTick TickType, FAct
 		{
 			UE_LOG(LogTemp, Warning, TEXT("[STUDENTPERCEPTOR] Health dropped. No visible enemy, turning around to scan."));
 
+			AIController->StopMovement();
 			OwnerPawn->AddActorWorldRotation(FRotator(0.f, 180.f, 0.f));
 		}
 		else
@@ -706,47 +707,55 @@ bool UStudentPerceptor::GetVillageCircleExploreLocation(FVector& OutLocation)
 	}
 
 	// TODO: check radius 
-	constexpr float CircleRadius = 1400.f;
-	constexpr float ProjectionExtent = 600.f;
+	constexpr float CircleRadius = 700.f;
+	constexpr float ProjectionExtent = 250.f;
 
 	const float AngleStep = 360.f / static_cast<float>(MaxVillageExplorePoints);
-	const float AngleDegrees = AngleStep * static_cast<float>(VillageExploreIndex);
-	const float AngleRadians = FMath::DegreesToRadians(AngleDegrees);
 
-	const FVector Offset(
-		FMath::Cos(AngleRadians) * CircleRadius,
-		FMath::Sin(AngleRadians) * CircleRadius,
-		0.f
-	);
-
-	const FVector DesiredLocation = LastVillageLocation + Offset;
-
-	FNavLocation ProjectedLocation;
-
-	const bool bProjected = NavSystem->ProjectPointToNavigation(
-		DesiredLocation,
-		ProjectedLocation,
-		FVector(ProjectionExtent, ProjectionExtent, ProjectionExtent)
-	);
-
-	if (!bProjected || IsInRecentDangerZone(ProjectedLocation.Location))
+	while (VillageExploreIndex < MaxVillageExplorePoints)
 	{
+		const float AngleDegrees = AngleStep * static_cast<float>(VillageExploreIndex);
+		const float AngleRadians = FMath::DegreesToRadians(AngleDegrees);
+
+		const FVector Offset(
+			FMath::Cos(AngleRadians) * CircleRadius,
+			FMath::Sin(AngleRadians) * CircleRadius,
+			0.f
+		);
+
+		const FVector DesiredLocation = LastVillageLocation + Offset;
+
+		FNavLocation ProjectedLocation;
+
+		const bool bProjected = NavSystem->ProjectPointToNavigation(
+			DesiredLocation,
+			ProjectedLocation,
+			FVector(ProjectionExtent, ProjectionExtent, ProjectionExtent)
+		);
+
+		const int CurrentPoint = VillageExploreIndex;
 		++VillageExploreIndex;
-		return false;
+
+		if (!bProjected || IsInRecentDangerZone(ProjectedLocation.Location))
+		{
+			continue;
+		}
+
+		OutLocation = ProjectedLocation.Location;
+
+		UE_LOG(
+			LogTemp,
+			Warning,
+			TEXT("[VillageExplore] Circle point %d/%d"),
+			CurrentPoint + 1,
+			MaxVillageExplorePoints
+		);
+
+		return true;
 	}
 
-	OutLocation = ProjectedLocation.Location;
-
-	UE_LOG(
-		LogTemp,
-		Warning,
-		TEXT("[VillageExplore] Circle point %d/%d"),
-		VillageExploreIndex + 1,
-		MaxVillageExplorePoints
-	);
-
-	++VillageExploreIndex;
-	return true;
+	UE_LOG(LogTemp, Warning, TEXT("[VillageExplore] Finished circle sweep."));
+	return false;
 }
 
 void UStudentPerceptor::ResetVillageExploreIndex()

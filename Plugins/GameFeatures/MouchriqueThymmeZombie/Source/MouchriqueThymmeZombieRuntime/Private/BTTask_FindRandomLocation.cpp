@@ -97,9 +97,10 @@ EBTNodeResult::Type UBTTask_FindRandomLocation::ExecuteTask(UBehaviorTreeCompone
 		}
 
 		ExploreDirection.Normalize();
+		Blackboard->SetValueAsVector(TEXT("ExploreDirection"), ExploreDirection);
 	}
 
-	constexpr float ExploreRadius = 1500.f;
+	constexpr float ExploreRadius = 1000.f;
 	constexpr float MinimumDistanceFromLastTarget = 700.f;
 
 	FNavLocation BestLocation;
@@ -131,7 +132,7 @@ EBTNodeResult::Type UBTTask_FindRandomLocation::ExecuteTask(UBehaviorTreeCompone
 		// do not keep picking places behind us
 		const float ForwardAlignment = FVector::DotProduct(ExploreDirection, DirectionToCandidate);
 
-		if (ForwardAlignment < -0.25f)
+		if (ForwardAlignment < 0.15f)
 		{
 			continue;
 		}
@@ -159,16 +160,9 @@ EBTNodeResult::Type UBTTask_FindRandomLocation::ExecuteTask(UBehaviorTreeCompone
 
 	if (!bFoundLocation)
 	{
+		ExploreDirection = ExploreDirection.RotateAngleAxis(60.f, FVector::UpVector);
+		Blackboard->SetValueAsVector(TEXT("ExploreDirection"), ExploreDirection);
 		return EBTNodeResult::Failed;
-	}
-
-	FVector NewExploreDirection = BestLocation.Location - PawnLocation;
-	NewExploreDirection.Z = 0.f;
-
-	if (!NewExploreDirection.IsNearlyZero())
-	{
-		NewExploreDirection.Normalize();
-		Blackboard->SetValueAsVector(TEXT("ExploreDirection"), NewExploreDirection);
 	}
 
 	Blackboard->SetValueAsVector(TEXT("MoveLocation"), BestLocation.Location);

@@ -67,7 +67,13 @@ EBTNodeResult::Type UBTTask_FindFleeLocation::ExecuteTask(UBehaviorTreeComponent
 
 	if (DirectionAway.IsNearlyZero())
 	{
-		return EBTNodeResult::Failed;
+		DirectionAway = -Pawn->GetActorForwardVector();
+		DirectionAway.Z = 0.f;
+
+		if (DirectionAway.IsNearlyZero())
+		{
+			DirectionAway = FVector::ForwardVector;
+		}
 	}
 
 	DirectionAway.Normalize();
