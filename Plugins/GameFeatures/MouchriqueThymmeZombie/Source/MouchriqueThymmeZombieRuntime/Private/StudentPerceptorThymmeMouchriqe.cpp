@@ -562,8 +562,14 @@ void UStudentPerceptor::MarkHouseSearched(AActor* House)
 	// remove house coz it already been searched
 	KnownHouses.Remove(House);
 
-	LastVillageLocation = House->GetActorLocation();
-	bHasLastVillageLocation = true;
+	FVector KnownHouseLocation;
+
+	if (GetKnownHouseLocation(House, KnownHouseLocation))
+	{
+		LastVillageLocation = KnownHouseLocation;
+		bHasLastVillageLocation = true;
+	}
+
 	ResetVillageExploreIndex();
 	APawn* OwnerPawn = Cast<APawn>(GetOwner());
 
@@ -915,6 +921,18 @@ bool UStudentPerceptor::GetLastKnownPurgeLocation(FVector& OutLocation) const
 	OutLocation = LastKnownPurgeLocation;
 	return true;
 }
+
+bool UStudentPerceptor::GetLastKnownVillageLocation(FVector& OutLocation) const
+{
+	if (!bHasLastVillageLocation)
+	{
+		return false;
+	}
+
+	OutLocation = LastVillageLocation;
+	return true;
+}
+
 bool UStudentPerceptor::HasVillageCampingResources() const
 {
 	if (KnownHouses.Num() > 0)
@@ -1203,7 +1221,9 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 	{
 		if (Stimulus.WasSuccessfullySensed())
 		{
-			// house is static but still store location perception actually gave us
+			// house location came from perception so tasks can safely use it later
+			KnownHouseLocations.Add(Actor, Stimulus.StimulusLocation);
+
 			const bool bWasTravelling = Blackboard->GetValueAsBool(SurvivorBB::IsTravellingBetweenVillages);
 
 			LastVillageLocation = Stimulus.StimulusLocation;
@@ -1338,9 +1358,26 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 	}
 }
 
+bool UStudentPerceptor::GetKnownHouseLocation(const AActor* House, FVector& OutLocation) const
+{
+	if (!House)
+	{
+		return false;
+	}
+
+	const FVector* KnownLocation = KnownHouseLocations.Find(TWeakObjectPtr<AActor>(const_cast<AActor*>(House)));
+
+	if (!KnownLocation)
+	{
+		return false;
+	}
+
+	OutLocation = *KnownLocation;
+	return true;
+}
+
 AActor* UStudentPerceptor::GetClosestKnownUnsearchedHouse(const FVector& FromLocation) const
 {
-	// returns closest unsearched house from known houses, but needs to be spotted to be added into known houses
 	AActor* ClosestHouse = nullptr;
 	float ClosestDistanceSq = TNumericLimits<float>::Max();
 
@@ -1351,7 +1388,14 @@ AActor* UStudentPerceptor::GetClosestKnownUnsearchedHouse(const FVector& FromLoc
 			continue;
 		}
 
-		const float DistanceSq = FVector::DistSquared2D(FromLocation, House->GetActorLocation());
+		FVector HouseLocation;
+
+		if (!GetKnownHouseLocation(House, HouseLocation))
+		{
+			continue;
+		}
+
+		const float DistanceSq = FVector::DistSquared2D(FromLocation, HouseLocation);
 
 		if (DistanceSq < ClosestDistanceSq)
 		{

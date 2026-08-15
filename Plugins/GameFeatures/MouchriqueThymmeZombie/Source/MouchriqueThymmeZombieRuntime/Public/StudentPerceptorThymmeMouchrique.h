@@ -24,6 +24,7 @@ public:
 	//TODO: private or public? 
 	void MarkHouseSearched(AActor* House);
 	AActor* GetClosestKnownUnsearchedHouse(const FVector& FromLocation) const;
+	bool GetKnownHouseLocation(const AActor* House, FVector& OutLocation) const;
 
 	UFUNCTION()
 	virtual void OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus);
@@ -53,6 +54,9 @@ public:
 	// purge task uses remembered position instead of reading hidden actor position
 	bool GetLastKnownPurgeLocation(FVector& OutLocation) const;
 
+	// get last known village location lol
+	bool GetLastKnownVillageLocation(FVector& OutLocation) const;
+
 	// true if location is still too close to somewhere we just fled from
 	bool IsInRecentDangerZone(const FVector& Location) const;
 
@@ -65,6 +69,9 @@ private:
 
 	UPROPERTY()
 	TArray<TObjectPtr<AActor>> KnownVillageWeapons;
+
+	// remember house positions perception actually gave us
+	TMap<TWeakObjectPtr<AActor>, FVector> KnownHouseLocations;
 
 	// hack fix for player getting hit by an enemy up their butt but not sensing it
 	int LastHealth = -1;

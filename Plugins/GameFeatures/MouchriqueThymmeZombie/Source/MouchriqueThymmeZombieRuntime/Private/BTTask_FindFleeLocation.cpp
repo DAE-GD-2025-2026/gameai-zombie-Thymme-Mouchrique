@@ -3,10 +3,11 @@
 #include "AIController.h"
 #include "BehaviorTree/BlackboardComponent.h"
 #include "NavigationSystem.h"
+#include "GameFramework/Pawn.h"
 
-#include "Survivor/SurvivorPawn.h"
 #include "StudentPerceptorThymmeMouchrique.h"
 #include "SurvivorAIShared.h"
+#include "Survivor/SurvivorPawn.h"
 
 UBTTask_FindFleeLocation::UBTTask_FindFleeLocation()
 {
@@ -24,7 +25,6 @@ EBTNodeResult::Type UBTTask_FindFleeLocation::ExecuteTask(UBehaviorTreeComponent
 
 	if (!Blackboard || !Controller)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[FleeTask] failed: no controller or blackboard"));
 		return EBTNodeResult::Failed;
 	}
 
@@ -32,25 +32,19 @@ EBTNodeResult::Type UBTTask_FindFleeLocation::ExecuteTask(UBehaviorTreeComponent
 
 	if (!Pawn)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[FleeTask] failed: no pawn"));
 		return EBTNodeResult::Failed;
 	}
 
-	// only flee if combat decision actually says to flee
 	if (!Blackboard->GetValueAsBool(SurvivorBB::ShouldFleeEnemy))
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[FleeTask] failed: ShouldFleeEnemy is false"));
 		return EBTNodeResult::Failed;
 	}
 
 	Pawn->StartRunning();
 	MoveRefreshTimer = 0.f;
 
-	if (!UpdateFleeMove(OwnerComp))
-	{
-		// no point yet, keep the flee task alive and try again next update
-		UE_LOG(LogTemp, Warning, TEXT("[FleeTask] no first point yet, retrying"));
-	}
+	// first search can fail, task will just retry
+	UpdateFleeMove(OwnerComp);
 
 	return EBTNodeResult::InProgress;
 }
@@ -60,25 +54,27 @@ void UBTTask_FindFleeLocation::TickTask(UBehaviorTreeComponent& OwnerComp, uint8
 	UBlackboardComponent* Blackboard = OwnerComp.GetBlackboardComponent();
 	AAIController* Controller = OwnerComp.GetAIOwner();
 
-	if (!Blackboard || !Controller)
+	if (!Blackboard || !Controller || !Controller->GetPawn())
 	{
 		StopRunning(OwnerComp);
 		FinishLatentTask(OwnerComp, EBTNodeResult::Failed);
 		return;
 	}
 
-	if (!Blackboard->GetValueAsBool(SurvivorBB::ShouldFleeEnemy) ||
-		!Blackboard->GetValueAsObject(SurvivorBB::TargetEnemy))
+	if (!Blackboard->GetValueAsBool(SurvivorBB::ShouldFleeEnemy) || !Blackboard->GetValueAsObject(SurvivorBB::TargetEnemy))
 	{
 		StopRunning(OwnerComp);
-		UE_LOG(LogTemp, Warning, TEXT("[FleeTask] finished"));
 		FinishLatentTask(OwnerComp, EBTNodeResult::Succeeded);
 		return;
 	}
 
+	if (ASurvivorPawn* Pawn = Cast<ASurvivorPawn>(Controller->GetPawn()))
+	{
+		Pawn->StartRunning();
+	}
+
 	MoveRefreshTimer += DeltaSeconds;
 
-	// update the flee point while the zombie moves instead of committing to one old point
 	if (MoveRefreshTimer < 0.45f)
 	{
 		return;
@@ -86,11 +82,7 @@ void UBTTask_FindFleeLocation::TickTask(UBehaviorTreeComponent& OwnerComp, uint8
 
 	MoveRefreshTimer = 0.f;
 
-	if (!UpdateFleeMove(OwnerComp))
-	{
-		// keep the current move instead of freezing because one refresh failed
-		UE_LOG(LogTemp, Warning, TEXT("[FleeTask] could not refresh flee point, keeping current move"));
-	}
+	UpdateFleeMove(OwnerComp);
 }
 
 EBTNodeResult::Type UBTTask_FindFleeLocation::AbortTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory)
@@ -109,38 +101,34 @@ bool UBTTask_FindFleeLocation::UpdateFleeMove(UBehaviorTreeComponent& OwnerComp)
 		return false;
 	}
 
-	ASurvivorPawn* Pawn = Cast<ASurvivorPawn>(Controller->GetPawn());
+	APawn* Pawn = Controller->GetPawn();
 
 	if (!Pawn)
 	{
 		return false;
 	}
 
-	AActor* Enemy = Cast<AActor>(Blackboard->GetValueAsObject(SurvivorBB::TargetEnemy));
 	UStudentPerceptor* Perceptor = Pawn->FindComponentByClass<UStudentPerceptor>();
+	AActor* Enemy = Cast<AActor>(Blackboard->GetValueAsObject(SurvivorBB::TargetEnemy));
 
 	if (!Enemy || !Perceptor)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[FleeTask] failed: no enemy or perceptor"));
 		return false;
 	}
 
 	FVector EnemyLocation;
 
-	// use last place enemy was actually seen instead of tracking it through walls
+	// only use where perception last saw the enemy
 	if (!Perceptor->GetLastKnownEnemyLocation(Enemy, EnemyLocation))
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[FleeTask] failed: no enemy location"));
 		return false;
 	}
 
 	const FVector PawnLocation = Pawn->GetActorLocation();
-
 	UNavigationSystemV1* NavSystem = UNavigationSystemV1::GetCurrent(Pawn->GetWorld());
 
 	if (!NavSystem)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("[FleeTask] failed: no navigation system"));
 		return false;
 	}
 
@@ -151,16 +139,16 @@ bool UBTTask_FindFleeLocation::UpdateFleeMove(UBehaviorTreeComponent& OwnerComp)
 	{
 		DirectionAway = -Pawn->GetActorForwardVector();
 		DirectionAway.Z = 0.f;
+	}
 
-		if (DirectionAway.IsNearlyZero())
-		{
-			DirectionAway = FVector::ForwardVector;
-		}
+	if (DirectionAway.IsNearlyZero())
+	{
+		DirectionAway = FVector::ForwardVector;
 	}
 
 	DirectionAway.Normalize();
 
-	// use visible enemies to push flee direction away from groups too
+	// also avoid the other zombies we currently see
 	TArray<FVector> VisibleThreatLocations;
 	Perceptor->GetVisibleEnemyLocations(VisibleThreatLocations);
 
@@ -172,168 +160,226 @@ bool UBTTask_FindFleeLocation::UpdateFleeMove(UBehaviorTreeComponent& OwnerComp)
 		Away.Z = 0.f;
 
 		const float DistanceSquared = FMath::Max(Away.SizeSquared2D(), 1.f);
-
 		SeparationForce += Away.GetSafeNormal() / DistanceSquared;
 	}
-
-	FVector FleeDirection = DirectionAway;
 
 	if (!SeparationForce.IsNearlyZero())
 	{
 		SeparationForce.Normalize();
-		FleeDirection = (DirectionAway * 0.8f + SeparationForce * 0.6f).GetSafeNormal();
+		DirectionAway = (DirectionAway * 0.8f + SeparationForce * 0.65f).GetSafeNormal();
 	}
 
-	if (FleeDirection.IsNearlyZero())
+	// if we're out of guns, use a safe house as part of the escape route
+	// hopefully we find another weapon inside while running through it
+	if (!Blackboard->GetValueAsBool(SurvivorBB::HasWeapon))
 	{
-		FleeDirection = DirectionAway;
+		AActor* House = Perceptor->GetClosestKnownUnsearchedHouse(PawnLocation);
+		FVector HouseLocation;
+
+		if (House && Perceptor->GetKnownHouseLocation(House, HouseLocation))
+		{
+			FVector ToHouse = HouseLocation - PawnLocation;
+			ToHouse.Z = 0.f;
+
+			const float DistanceToHouse = ToHouse.Size2D();
+
+			if (DistanceToHouse > 150.f && !ToHouse.IsNearlyZero())
+			{
+				ToHouse.Normalize();
+
+				const float SafetyAlignment = FVector::DotProduct(ToHouse, DirectionAway);
+				const float CurrentEnemyDistance = FVector::Dist2D(PawnLocation, EnemyLocation);
+				const float HouseEnemyDistance = FVector::Dist2D(HouseLocation, EnemyLocation);
+
+				// sideways is fine, just don't run back through the zombie for it
+				if (SafetyAlignment > -0.20f && HouseEnemyDistance > CurrentEnemyDistance + 50.f)
+				{
+					FNavLocation HouseNavLocation;
+
+					if (NavSystem->ProjectPointToNavigation(HouseLocation, HouseNavLocation, FVector(450.f, 450.f, 250.f)))
+					{
+						Blackboard->SetValueAsVector(SurvivorBB::MoveLocation, HouseNavLocation.Location);
+						Controller->MoveToLocation(HouseNavLocation.Location, 100.f);
+
+						UE_LOG(LogTemp, Warning, TEXT("[FleeTask] unarmed, escaping through house: %s"), *House->GetName());
+						return true;
+					}
+				}
+			}
+		}
 	}
 
-	// curve a little so we do not just run backwards into the same zombie
-	const FVector SideDirection(-FleeDirection.Y, FleeDirection.X, 0.f);
-	FleeDirection = (FleeDirection + SideDirection * 0.25f).GetSafeNormal();
+	// move away from the enemy and preferably outward from the village
+	FVector LastVillageLocation;
+	const bool bHasVillage = Perceptor->GetLastKnownVillageLocation(LastVillageLocation);
 
-	constexpr float FleeDistance = 800.f;
-	constexpr float SearchRadius = 400.f;
-	constexpr float MinimumMoveDistance = 250.f;
+	FVector OutwardDirection = FVector::ZeroVector;
 
-	const FVector DesiredLocation = PawnLocation + FleeDirection * FleeDistance;
+	if (bHasVillage)
+	{
+		OutwardDirection = PawnLocation - LastVillageLocation;
+		OutwardDirection.Z = 0.f;
 
-	FNavLocation BestFleeLocation;
+		if (!OutwardDirection.IsNearlyZero())
+		{
+			OutwardDirection.Normalize();
+		}
+	}
+
+	FVector TravelDirection = DirectionAway;
+
+	if (!OutwardDirection.IsNearlyZero())
+	{
+		// survival first, outward movement just helps us cover new ground
+		TravelDirection = (DirectionAway * 0.85f + OutwardDirection * 0.30f).GetSafeNormal();
+	}
+
+	if (TravelDirection.IsNearlyZero())
+	{
+		TravelDirection = DirectionAway;
+	}
+
+	constexpr float FleeDistance = 1100.f;
+	constexpr float SearchRadius = 600.f;
+	constexpr float MinimumMoveDistance = 300.f;
+
+	const FVector DesiredLocation = PawnLocation + TravelDirection * FleeDistance;
+
+	FNavLocation BestLocation;
 	float BestScore = TNumericLimits<float>::Lowest();
-	bool bFoundFleeLocation = false;
+	bool bFoundLocation = false;
 
-	const float CurrentDistanceFromEnemy = FVector::Dist2D(PawnLocation, EnemyLocation);
+	const float CurrentEnemyDistance = FVector::Dist2D(PawnLocation, EnemyLocation);
+	const float CurrentVillageDistance = bHasVillage ? FVector::Dist2D(PawnLocation, LastVillageLocation) : 0.f;
 
-	// try a few reachable spots and choose one that actually gets further from enemy
-	for (int Attempt = 0; Attempt < 10; ++Attempt)
+	for (int Attempt = 0; Attempt < 14; ++Attempt)
 	{
-		FNavLocation CandidateLocation;
+		FNavLocation Candidate;
 
-		if (!NavSystem->GetRandomReachablePointInRadius(DesiredLocation, SearchRadius, CandidateLocation))
+		if (!NavSystem->GetRandomReachablePointInRadius(DesiredLocation, SearchRadius, Candidate))
 		{
 			continue;
 		}
 
-		const float DistanceFromEnemy = FVector::Dist2D(CandidateLocation.Location, EnemyLocation);
-		const float TravelDistance = FVector::Dist2D(PawnLocation, CandidateLocation.Location);
+		const float TravelDistance = FVector::Dist2D(PawnLocation, Candidate.Location);
 
-		if (TravelDistance < MinimumMoveDistance || DistanceFromEnemy <= CurrentDistanceFromEnemy)
+		if (TravelDistance < MinimumMoveDistance)
 		{
 			continue;
 		}
 
-		float ClosestThreatDistance = DistanceFromEnemy;
+		const float EnemyDistance = FVector::Dist2D(Candidate.Location, EnemyLocation);
+
+		// never deliberately choose somewhere closer to the main threat
+		if (EnemyDistance <= CurrentEnemyDistance + 100.f)
+		{
+			continue;
+		}
+
+		if (Perceptor->IsInRecentDangerZone(Candidate.Location))
+		{
+			continue;
+		}
+
+		float ClosestThreatDistance = EnemyDistance;
 
 		for (const FVector& ThreatLocation : VisibleThreatLocations)
 		{
 			ClosestThreatDistance = FMath::Min(
 				ClosestThreatDistance,
-				FVector::Dist2D(CandidateLocation.Location, ThreatLocation)
-			);
+				FVector::Dist2D(Candidate.Location, ThreatLocation));
 		}
 
-		const float Score = ClosestThreatDistance - TravelDistance * 0.15f;
+		float VillageProgress = 0.f;
+
+		if (bHasVillage)
+		{
+			const float CandidateVillageDistance = FVector::Dist2D(Candidate.Location, LastVillageLocation);
+			VillageProgress = CandidateVillageDistance - CurrentVillageDistance;
+		}
+
+		const FVector CandidateDirection = (Candidate.Location - PawnLocation).GetSafeNormal2D();
+		const float DirectionProgress = FVector::DotProduct(CandidateDirection, TravelDirection) * 250.f;
+
+		// threat distance matters most, then reward leaving the old village
+		const float Score = ClosestThreatDistance + VillageProgress * 0.45f + DirectionProgress - TravelDistance * 0.08f;
 
 		if (Score > BestScore)
 		{
 			BestScore = Score;
-			BestFleeLocation = CandidateLocation;
-			bFoundFleeLocation = true;
+			BestLocation = Candidate;
+			bFoundLocation = true;
 		}
 	}
 
-	if (!bFoundFleeLocation)
+	// local fallback if the ideal direction is blocked
+	if (!bFoundLocation)
 	{
-		// fallback around the player in case the point far away is outside the navmesh
 		for (int Attempt = 0; Attempt < 10; ++Attempt)
 		{
-			FNavLocation CandidateLocation;
+			FNavLocation Candidate;
 
-			if (!NavSystem->GetRandomReachablePointInRadius(PawnLocation, 650.f, CandidateLocation))
+			if (!NavSystem->GetRandomReachablePointInRadius(PawnLocation, 700.f, Candidate))
 			{
 				continue;
 			}
 
-			const float DistanceFromEnemy = FVector::Dist2D(CandidateLocation.Location, EnemyLocation);
-			const float TravelDistance = FVector::Dist2D(PawnLocation, CandidateLocation.Location);
+			const float TravelDistance = FVector::Dist2D(PawnLocation, Candidate.Location);
+			const float EnemyDistance = FVector::Dist2D(Candidate.Location, EnemyLocation);
 
-			if (TravelDistance < MinimumMoveDistance || DistanceFromEnemy <= CurrentDistanceFromEnemy)
+			if (TravelDistance < 200.f || EnemyDistance <= CurrentEnemyDistance)
 			{
 				continue;
 			}
 
-			float ClosestThreatDistance = DistanceFromEnemy;
-
-			for (const FVector& ThreatLocation : VisibleThreatLocations)
+			if (Perceptor->IsInRecentDangerZone(Candidate.Location))
 			{
-				ClosestThreatDistance = FMath::Min(
-					ClosestThreatDistance,
-					FVector::Dist2D(CandidateLocation.Location, ThreatLocation)
-				);
+				continue;
 			}
 
-			const float Score = ClosestThreatDistance - TravelDistance * 0.15f;
+			BestLocation = Candidate;
+			bFoundLocation = true;
+			break;
+		}
+	}
 
-			if (Score > BestScore)
+	// last resort, just go straight away from the enemy
+	if (!bFoundLocation)
+	{
+		FNavLocation ProjectedLocation;
+		const FVector EmergencyLocation = PawnLocation + DirectionAway * 500.f;
+
+		if (NavSystem->ProjectPointToNavigation(EmergencyLocation, ProjectedLocation, FVector(350.f, 350.f, 250.f)))
+		{
+			if (FVector::Dist2D(PawnLocation, ProjectedLocation.Location) > 100.f)
 			{
-				BestScore = Score;
-				BestFleeLocation = CandidateLocation;
-				bFoundFleeLocation = true;
+				BestLocation = ProjectedLocation;
+				bFoundLocation = true;
 			}
 		}
 	}
 
-	if (!bFoundFleeLocation)
+	if (!bFoundLocation)
 	{
-		// last try in the general escape direction, moving is better than standing still here
-		const FVector FallbackTarget = PawnLocation + FleeDirection * 450.f;
-		FNavLocation ProjectedFallback;
-
-		if (NavSystem->ProjectPointToNavigation(
-			FallbackTarget,
-			ProjectedFallback,
-			FVector(350.f, 350.f, 250.f)))
-		{
-			const float FallbackDistance =
-				FVector::Dist2D(PawnLocation, ProjectedFallback.Location);
-
-			if (FallbackDistance > 100.f)
-			{
-				Blackboard->SetValueAsVector(
-					SurvivorBB::MoveLocation,
-					ProjectedFallback.Location);
-
-				Controller->MoveToLocation(ProjectedFallback.Location, 100.f);
-
-				UE_LOG(LogTemp, Warning, TEXT("[FleeTask] using simple fallback point"));
-				return true;
-			}
-		}
-
-		UE_LOG(LogTemp, Warning, TEXT("[FleeTask] could not find a new flee point"));
+		UE_LOG(LogTemp, Warning, TEXT("[FleeTask] couldn't find new point, keeping current movement"));
 		return false;
 	}
 
-	Blackboard->SetValueAsVector(SurvivorBB::MoveLocation, BestFleeLocation.Location);
-	Controller->MoveToLocation(BestFleeLocation.Location, 100.f);
+	Blackboard->SetValueAsVector(SurvivorBB::MoveLocation, BestLocation.Location);
+	Controller->MoveToLocation(BestLocation.Location, 100.f);
 
 	return true;
 }
 
 void UBTTask_FindFleeLocation::StopRunning(UBehaviorTreeComponent& OwnerComp) const
 {
-	AAIController* Controller = OwnerComp.GetAIOwner();
-
-	if (!Controller)
+	if (AAIController* Controller = OwnerComp.GetAIOwner())
 	{
-		return;
-	}
+		Controller->StopMovement();
 
-	Controller->StopMovement();
-
-	if (ASurvivorPawn* Pawn = Cast<ASurvivorPawn>(Controller->GetPawn()))
-	{
-		Pawn->StopRunning();
+		if (ASurvivorPawn* Pawn = Cast<ASurvivorPawn>(Controller->GetPawn()))
+		{
+			Pawn->StopRunning();
+		}
 	}
 }

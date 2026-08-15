@@ -50,6 +50,8 @@ EBTNodeResult::Type UBTTask_FindHouseSearchLocation::ExecuteTask(UBehaviorTreeCo
 
 	if (SearchIndex >= UE_ARRAY_COUNT(SearchOffsets))
 	{
+		Blackboard->ClearValue(SurvivorBB::TargetHouse);
+		Blackboard->SetValueAsInt(TEXT("HouseSearchCount"), 0);
 		return EBTNodeResult::Failed;
 	}
 
