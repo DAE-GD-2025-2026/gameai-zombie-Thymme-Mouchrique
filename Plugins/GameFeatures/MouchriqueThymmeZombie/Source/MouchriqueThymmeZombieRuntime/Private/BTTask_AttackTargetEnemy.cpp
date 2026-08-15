@@ -114,46 +114,50 @@ EBTNodeResult::Type UBTTask_AttackTargetEnemy::ExecuteTask(UBehaviorTreeComponen
 
 		if (Item->GetItemType() == EItemType::Shotgun)
 		{
-			// shotgun is better close up
-			if (DistanceToEnemy < 450.f)
+			// shotgun spread makes it much better when the zombie is actually close
+			if (DistanceToEnemy < 100.f)
 			{
-				Score += 40.f;
+				Score += 60.f;
+			}
+			else if (DistanceToEnemy < 220.f)
+			{
+				Score += 25.f;
 			}
 			else
 			{
-				Score -= 20.f;
+				Score -= 50.f;
 			}
 
-			// runner getting close is dangerous so shotgun gets bonus
-			if (EnemyType == EKnownZombieType::Runner)
+			if (EnemyType == EKnownZombieType::Runner && DistanceToEnemy < 180.f)
+			{
+				Score += 20.f;
+			}
+
+			if (EnemyType == EKnownZombieType::Heavy && DistanceToEnemy < 140.f)
 			{
 				Score += 15.f;
-			}
-
-			// heavy takes a lot of ammo so shotgun is less attractive
-			if (EnemyType == EKnownZombieType::Heavy)
-			{
-				Score -= 10.f;
 			}
 
 			Cooldown = 0.60f;
 		}
 		else if (Item->GetItemType() == EItemType::Pistol)
 		{
-			// pistol is better when enemy is not right on top of player
-			if (DistanceToEnemy >= 350.f)
+			if (DistanceToEnemy >= 220.f)
 			{
-				Score += 25.f;
+				Score += 60.f;
+			}
+			else if (DistanceToEnemy >= 100.f)
+			{
+				Score += 35.f;
 			}
 			else
 			{
-				Score += 5.f;
+				Score += 10.f;
 			}
 
-			// pistol saves shotgun ammo when fighting heavy
-			if (EnemyType == EKnownZombieType::Heavy)
+			if (EnemyType == EKnownZombieType::Heavy && DistanceToEnemy >= 140.f)
 			{
-				Score += 5.f;
+				Score += 10.f;
 			}
 		}
 

@@ -11,6 +11,7 @@
 UBTTask_FindRandomLocation::UBTTask_FindRandomLocation()
 {
 	NodeName = TEXT("Find Random Location");
+	bCreateNodeInstance = true;
 }
 
 EBTNodeResult::Type UBTTask_FindRandomLocation::ExecuteTask(UBehaviorTreeComponent& OwnerComp, uint8* NodeMemory)
@@ -46,9 +47,21 @@ EBTNodeResult::Type UBTTask_FindRandomLocation::ExecuteTask(UBehaviorTreeCompone
 
 	const FVector PawnLocation = Pawn->GetActorLocation();
 	const FVector LastExploreLocation = Blackboard->GetValueAsVector(TEXT("LastExploreLocation"));
+
+	FVector LastVillageLocation;
+	const bool bHasVillageLocation = StudentPerceptor->GetLastKnownVillageLocation(LastVillageLocation);
+
+	// remember where the first village was
+	// later villages are generated roughly around this area in a ring
+	if (!bHasOriginVillageLocation && bHasVillageLocation)
+	{
+		OriginVillageLocation = LastVillageLocation;
+		OriginVillageLocation.Z = 0.f;
+		bHasOriginVillageLocation = true;
+	}
+
 	FVector ExploreDirection = Blackboard->GetValueAsVector(TEXT("ExploreDirection"));
 
-	// if there is no exploration direction yet, use where player is facing
 	if (ExploreDirection.IsNearlyZero())
 	{
 		ExploreDirection = Pawn->GetActorForwardVector();
@@ -63,19 +76,55 @@ EBTNodeResult::Type UBTTask_FindRandomLocation::ExecuteTask(UBehaviorTreeCompone
 		Blackboard->SetValueAsVector(TEXT("ExploreDirection"), ExploreDirection);
 	}
 
-	constexpr float ExploreRadius = 1400.f;
-	constexpr float MinimumDistanceFromLastTarget = 700.f;
+	FVector SearchDirection = ExploreDirection;
+
+	if (bHasOriginVillageLocation && bHasVillageLocation)
+	{
+		FVector RadialDirection = LastVillageLocation - OriginVillageLocation;
+		RadialDirection.Z = 0.f;
+
+		// once we're far enough from the original village we're probably on the outer village ring
+		if (RadialDirection.Size2D() > 1000.f)
+		{
+			RadialDirection.Normalize();
+
+			// tangent makes us travel around the ring instead of randomly cutting across the map
+			FVector TangentDirection(
+				-RadialDirection.Y * RingDirection,
+				RadialDirection.X * RingDirection,
+				0.f
+			);
+
+			TangentDirection.Normalize();
+
+			// keep some outward pressure so imperfect village-center estimates don't pull us inward
+			SearchDirection = (TangentDirection * 0.85f + RadialDirection * 0.20f).GetSafeNormal();
+
+			UE_LOG(LogTemp, Warning, TEXT("[Explore] Searching around inferred village ring."));
+		}
+		else
+		{
+			// starting village is near our inferred center, so first we need to get out toward the ring
+			SearchDirection = ExploreDirection;
+
+			UE_LOG(LogTemp, Warning, TEXT("[Explore] Leaving starting village to find outer villages."));
+		}
+	}
+
+	constexpr float SearchDistance = 1800.f;
+	constexpr float MinimumMoveDistance = 700.f;
+
+	constexpr float MinimumDistanceFromLastTarget = 650.f;
 
 	FNavLocation BestLocation;
 	float BestScore = TNumericLimits<float>::Lowest();
 	bool bFoundLocation = false;
 
-	// try multiple points instead of just taking first random one
-	for (int Attempt = 0; Attempt < 12; ++Attempt)
+	for (int Attempt = 0; Attempt < 16; ++Attempt)
 	{
 		FNavLocation CandidateLocation;
 
-		if (!NavSystem->GetRandomReachablePointInRadius(PawnLocation, ExploreRadius, CandidateLocation))
+		if (!NavSystem->GetRandomReachablePointInRadius(PawnLocation, SearchDistance, CandidateLocation))
 		{
 			continue;
 		}
@@ -90,24 +139,26 @@ EBTNodeResult::Type UBTTask_FindRandomLocation::ExecuteTask(UBehaviorTreeCompone
 
 		const float DistanceToCandidate = DirectionToCandidate.Size2D();
 
-		if (DirectionToCandidate.IsNearlyZero())
+		if (DistanceToCandidate < MinimumMoveDistance)
 		{
 			continue;
 		}
 
 		DirectionToCandidate.Normalize();
 
-		// do not keep picking places behind us
-		const float ForwardAlignment = FVector::DotProduct(ExploreDirection, DirectionToCandidate);
+		const float SearchAlignment = FVector::DotProduct(SearchDirection, DirectionToCandidate);
 
-		if (ForwardAlignment < 0.15f)
+		if (SearchAlignment < 0.25f)
 		{
 			continue;
 		}
 
 		if (!LastExploreLocation.IsNearlyZero())
 		{
-			const float DistanceFromLastTarget = FVector::Dist2D(CandidateLocation.Location, LastExploreLocation);
+			const float DistanceFromLastTarget = FVector::Dist2D(
+				CandidateLocation.Location,
+				LastExploreLocation
+			);
 
 			if (DistanceFromLastTarget < MinimumDistanceFromLastTarget)
 			{
@@ -115,8 +166,8 @@ EBTNodeResult::Type UBTTask_FindRandomLocation::ExecuteTask(UBehaviorTreeCompone
 			}
 		}
 
-		// prefer moving forward and actually making some distance
-		const float Score = ForwardAlignment * 1000.f + DistanceToCandidate * 0.25f;
+		// mostly reward going in our ring-search direction
+		const float Score = SearchAlignment * 1200.f + DistanceToCandidate * 0.20f;
 
 		if (Score > BestScore)
 		{
@@ -128,12 +179,21 @@ EBTNodeResult::Type UBTTask_FindRandomLocation::ExecuteTask(UBehaviorTreeCompone
 
 	if (!bFoundLocation)
 	{
-		ExploreDirection = ExploreDirection.RotateAngleAxis(60.f, FVector::UpVector);
+		// direction might be blocked, turn a bit but don't completely lose our search pattern
+		ExploreDirection = ExploreDirection.RotateAngleAxis(45.f * RingDirection, FVector::UpVector);
+		ExploreDirection.Normalize();
+
 		Blackboard->SetValueAsVector(TEXT("ExploreDirection"), ExploreDirection);
+
+		// if one side keeps failing this eventually lets us try the other way
+		RingDirection *= -1.f;
+
+		UE_LOG(LogTemp, Warning, TEXT("[Explore] Ring path blocked, changing search direction."));
+
 		return EBTNodeResult::Failed;
 	}
 
-	Blackboard->SetValueAsVector(TEXT("MoveLocation"), BestLocation.Location);
+	Blackboard->SetValueAsVector(SurvivorBB::MoveLocation, BestLocation.Location);
 	Blackboard->SetValueAsVector(TEXT("LastExploreLocation"), BestLocation.Location);
 	Blackboard->SetValueAsBool(SurvivorBB::IsTravellingBetweenVillages, true);
 

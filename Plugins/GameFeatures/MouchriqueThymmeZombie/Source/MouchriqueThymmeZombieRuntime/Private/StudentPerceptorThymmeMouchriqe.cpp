@@ -89,6 +89,13 @@ namespace
 		}
 
 		const bool bHasWeapon = InventoryHasUsableWeapon(Inventory);
+
+		const ABaseItem* TargetItem = Cast<ABaseItem>(Blackboard->GetValueAsObject(SurvivorBB::TargetItem));
+
+		const bool bHasKnownWeaponTarget =
+			TargetItem &&
+			IsWeaponItemType(TargetItem->GetItemType());
+
 		const bool bLowHealth = Blackboard->GetValueAsBool(SurvivorBB::IsLowHealth);
 
 		bool bShouldFleeToHouse = false;
@@ -100,10 +107,13 @@ namespace
 
 		if (bIsRunner)
 		{
-			// Runner is faster than the player
 			if (bHasWeapon && !bLowHealth)
 			{
 				bShouldAttackEnemy = true;
+			}
+			else if (Blackboard->GetValueAsObject(SurvivorBB::TargetHouse))
+			{
+				bShouldFleeToHouse = true;
 			}
 			else
 			{
@@ -112,10 +122,17 @@ namespace
 		}
 		else if (bIsHeavy)
 		{
-			// heavy hits hard so use the gun if we still have one instead of wasting time running
 			if (bHasWeapon && !bLowHealth)
 			{
 				bShouldAttackEnemy = true;
+			}
+			else if (bHasKnownWeaponTarget)
+			{
+				// go grab known gun
+			}
+			else if (Blackboard->GetValueAsObject(SurvivorBB::TargetHouse))
+			{
+				bShouldFleeToHouse = true;
 			}
 			else
 			{
@@ -124,10 +141,17 @@ namespace
 		}
 		else
 		{
-			// normal zombie is worth fighting while we still have ammo
 			if (bHasWeapon && !bLowHealth)
 			{
 				bShouldAttackEnemy = true;
+			}
+			else if (bHasKnownWeaponTarget)
+			{
+				// go grab known gun
+			}
+			else if (Blackboard->GetValueAsObject(SurvivorBB::TargetHouse))
+			{
+				bShouldFleeToHouse = true;
 			}
 			else
 			{
@@ -948,11 +972,7 @@ bool UStudentPerceptor::HasVillageCampingResources() const
 		}
 	}
 
-	// if we still have ammo from this village, keep camping and use it before moving on
-	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
-	const UInventoryComponent* Inventory = OwnerPawn ? OwnerPawn->FindComponentByClass<UInventoryComponent>() : nullptr;
-
-	return InventoryHasUsableWeapon(Inventory) || GetTotalUsableAmmo(Inventory) > 0;
+	return false;
 }
 
 bool UStudentPerceptor::IsVillageDepleted() const
@@ -1221,18 +1241,22 @@ void UStudentPerceptor::OnPerceptionUpdated(AActor* Actor, FAIStimulus Stimulus)
 	{
 		if (Stimulus.WasSuccessfullySensed())
 		{
-			// house location came from perception so tasks can safely use it later
-			KnownHouseLocations.Add(Actor, Stimulus.StimulusLocation);
-
 			const bool bWasTravelling = Blackboard->GetValueAsBool(SurvivorBB::IsTravellingBetweenVillages);
+			const bool bIsNewHouse = !KnownHouses.Contains(Actor) && !SearchedHouses.Contains(Actor);
 
-			LastVillageLocation = Stimulus.StimulusLocation;
-			bHasLastVillageLocation = true;
-			Blackboard->SetValueAsBool(SurvivorBB::IsTravellingBetweenVillages, false);
-
-			if (bWasTravelling)
+			// only count a newly discovered house as arriving at another village
+			if (bWasTravelling && bIsNewHouse)
 			{
+				LastVillageLocation = Stimulus.StimulusLocation;
+				bHasLastVillageLocation = true;
+
+				Blackboard->SetValueAsBool(SurvivorBB::IsTravellingBetweenVillages, false);
 				ResetVillageExploreIndex();
+			}
+			else if (!bWasTravelling)
+			{
+				LastVillageLocation = Stimulus.StimulusLocation;
+				bHasLastVillageLocation = true;
 			}
 
 			if (!KnownHouses.Contains(Actor) && !SearchedHouses.Contains(Actor))
